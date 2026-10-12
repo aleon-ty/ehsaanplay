@@ -49,7 +49,7 @@
 ---
 
 # DEVELOPER NOTE
-<img width="771" height="152" alt="image" src="https://github.com/user-attachments/assets/88b590ee-0819-4554-b61b-b81b246c31e8" />
+<img width="764" height="147" alt="image" src="https://github.com/user-attachments/assets/78c2c195-9c6a-4aa6-8405-039bbe803a36" />
 
 ---
 
