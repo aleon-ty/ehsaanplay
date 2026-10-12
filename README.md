@@ -35,8 +35,9 @@
 - beautiful analytics page
 - automatic backup in choosen folder
 - a good looking first visit guide ✔
-- new personal favourite by thmeo07 ✔
-  
+- new personal favourite by (thmeo07) ✔
+- inroduce new menu popup on long press (aleon-ty) ✔
+
 ---
 
 # DEVELOPER NOTE
