@@ -1,8 +1,8 @@
 {
   "name": "EHSAAN PLAY",
-  "description": "A modern, beautiful, local-first personal movie and TV-series journal & library.",
+  "description": "A modern, beautiful, local-first personal movie and TV-series library.",
   "requestFramePermissions": [],
   "majorCapabilities": [
-    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+    "MAJOR_CAPABILITY_SERVER_SID_API"
   ]
 }
