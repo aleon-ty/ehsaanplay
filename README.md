@@ -27,16 +27,23 @@
 
 ## ‼️ DISCLAIMER
 - No fork of this project will recieve support, if you use a fork, ask the forker to support you. 
-## WHAT'S NEW IN LATEST RELEASE
-> **EHSAAN PLAY now planning to introduce:**
-- multi api fallback support
-- local wi-fi peer to peer sync (beta) ✔
-- in built trailer player ✔
-- beautiful analytics page
-- automatic backup in choosen folder
-- a good looking first visit guide ✔
-- new personal favourite catagery by (thmeo07) ✔
-- new popup long press menu inside the movie image card (aleon-ty) ✔
+## 🚀 WHAT'S NEW IN LATEST RELEASE
+
+> [!IMPORTANT]
+> **EHSAAN PLAY — Upcoming Features & Latest Improvements**
+>
+> We're working on exciting new features to make your experience better!
+
+- ❌ **Multi-API Fallback Support**
+-  ✔ **Local Wi-Fi Peer-to-Peer Sync** *(Beta)*
+- ✔ **Built-in Trailer Player**
+- ❌ **Beautiful Analytics Page**
+- ❌ **Automatic Backup to a Chosen Folder**
+-  ✔ **Beautiful First-Visit Guide**
+-  ✔ **Personal Favourites Category** — by [@thmeo07](https://github.com/thmeo07)
+-  ✔ **Long-Press Popup Menu** inside movie image cards — by [@aleon-ty](https://github.com/aleon-ty)
+
+**Legend:** `[x]` Completed · `[ ]` Planned / In Progress
 
 ---
 
