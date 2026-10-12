@@ -43,8 +43,6 @@
 -  ✔ **Personal Favourites Category** — by [@thmeo07](https://github.com/thmeo07)
 -  ✔ **Long-Press Popup Menu** inside movie image cards — by [@aleon-ty](https://github.com/aleon-ty)
 
-**Legend:** `[x]` Completed · `[ ]` Planned / In Progress
-
 ---
 
 # DEVELOPER NOTE
