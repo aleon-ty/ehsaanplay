@@ -42,7 +42,9 @@
 -  ✔ **Beautiful First-Visit Guide**
 -  ✔ **Personal Favourites Category** — by [@thmeo07](https://github.com/thmeo07)
 -  ✔ **Long-Press Popup Menu** inside movie image cards — by [@aleon-ty](https://github.com/aleon-ty)
-
+- ❌ **introduce direct web search result into app
+- ✔ **add imdb link metadata crowl as fallback of every service
+- 
 ---
 
 # DEVELOPER NOTE
