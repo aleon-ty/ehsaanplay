@@ -30,12 +30,12 @@
 ## WHAT'S NEW IN LATEST RELEASE
 > **EHSAAN PLAY now planning to introduce:**
 - multi api fallback support
-- local wi-fi peer to peer sync(beta) ✔
+- local wi-fi peer to peer sync (beta) ✔
 - in built trailer player ✔
 - beautiful analytics page
 - automatic backup in choosen folder
 - a good looking first visit guide ✔
-- new personal favourite by thmeo07 ✔
+- new personal favourite catagery by (thmeo07) ✔
 - new popup long press menu inside the movie image card (aleon-ty) ✔
 
 ---
