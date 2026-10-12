@@ -334,8 +334,6 @@ If EHSAAN PLAY or any other EHSAAN project is useful to you, you can support the
 
 ---
 
-# 🌐 More from EHSAAN
-
 <p align="center">
 
   <a href="https://ehsaancolour.ai.studio/" target="_blank">
