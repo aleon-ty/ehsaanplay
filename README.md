@@ -36,7 +36,8 @@
 - automatic backup in choosen folder
 - a good looking first visit guide ✔
 - new personal favourite by thmeo07 ✔
-  
+- new popup long press menu inside the movie image card (aleon-ty) ✔
+
 ---
 
 # DEVELOPER NOTE
