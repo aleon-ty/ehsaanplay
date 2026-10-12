@@ -45,6 +45,7 @@
 - ❌ **introduce direct web search result into app
 - ✔ **add imdb link metadata crowl as fallback of every service
 
+### legend- ✔COMPLETE | ❌PENDING
 ---
 
 # DEVELOPER NOTE
