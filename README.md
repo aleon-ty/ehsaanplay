@@ -380,3 +380,4 @@ If EHSAAN PLAY or any other EHSAAN project is useful to you, you can support the
 <sub>If you find something useful here, a ⭐ is always appreciated.</sub>
 
 </div>
+NOTE: Please any DEV. make this webapp into installable apk or exe
