@@ -1,7 +1,9 @@
 import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { MediaItem, MediaType, PersonalMediaState } from '../../types/movie';
-import { searchTMDB } from '../../services/tmdb';
-import { Search, X, Star, Loader2, Plus, Check, Bookmark } from 'lucide-react';
+import { searchWithFallback, SearchProviderMode, SearchDiagnosticInfo } from '../../services/metadataFallback';
+
+import { parseImdbInput } from '../../services/imdbParser';
+import { Search, X, Star, Loader2, Plus, Check, Bookmark, Database, Sparkles, Layers, AlertCircle, Info, ChevronDown, SlidersHorizontal } from 'lucide-react';
 import { SafeImage } from '../common/SafeImage';
 
 interface SearchModalProps {
@@ -10,10 +12,12 @@ interface SearchModalProps {
   onSelectMedia: (item: MediaItem) => void;
   localMediaItems: MediaItem[];
   tmdbApiKey?: string;
+  omdbApiKey?: string;
   onAddMediaToLibrary: (item: MediaItem) => void;
   userStates?: Record<string, PersonalMediaState>;
   onToggleWatchlist?: (id: string) => void;
   onToggleWatched?: (id: string) => void;
+  onOpenImdbPreview?: (query?: string) => void;
 }
 
 export const SearchModal: React.FC<SearchModalProps> = ({
@@ -22,16 +26,28 @@ export const SearchModal: React.FC<SearchModalProps> = ({
   onSelectMedia,
   localMediaItems,
   tmdbApiKey,
+  omdbApiKey,
   onAddMediaToLibrary,
   userStates = {},
   onToggleWatchlist,
   onToggleWatched,
+  onOpenImdbPreview,
 }) => {
   const [query, setQuery] = useState('');
   const [formatFilter, setFormatFilter] = useState<'all' | MediaType>('all');
   const [remoteResults, setRemoteResults] = useState<MediaItem[]>([]);
+  const [searchSource, setSearchSource] = useState<'tmdb' | 'omdb' | 'cache' | 'empty'>('empty');
+  const [providerMode, setProviderMode] = useState<SearchProviderMode>('auto');
   const [isSearching, setIsSearching] = useState(false);
+  const [searchError, setSearchError] = useState<string | null>(null);
+  const [searchDiagnostic, setSearchDiagnostic] = useState<SearchDiagnosticInfo | null>(null);
+  const [showDiagnosticPanel, setShowDiagnosticPanel] = useState(false);
+  const [isMoreOpen, setIsMoreOpen] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
+  const searchCounterRef = useRef<number>(0);
+
+  // Auto-detect IMDb link or ID in search input
+  const detectedImdb = useMemo(() => parseImdbInput(query), [query]);
 
   // Focus input on open
   useEffect(() => {
@@ -40,56 +56,207 @@ export const SearchModal: React.FC<SearchModalProps> = ({
     } else {
       setQuery('');
       setRemoteResults([]);
+      setSearchSource('empty');
+      setSearchError(null);
+      setSearchDiagnostic(null);
+      setShowDiagnosticPanel(false);
     }
   }, [isOpen]);
 
-  // Live search handler with fast debounce
+  // Live search handler with fast debounce, provider selection and monotonic request sequencing
   useEffect(() => {
-    if (!query.trim()) {
+    const trimmed = query.trim();
+    if (!trimmed) {
       setRemoteResults([]);
+      setSearchSource('empty');
+      setSearchError(null);
+      setSearchDiagnostic(null);
       setIsSearching(false);
       return;
     }
 
     setIsSearching(true);
+    setSearchError(null);
+    const searchId = ++searchCounterRef.current;
+    const controller = new AbortController();
+
     const timer = setTimeout(async () => {
       try {
-        const res = await searchTMDB(query, tmdbApiKey);
-        setRemoteResults(res || []);
-      } catch {
-        setRemoteResults([]);
+        const { items, source, error, diagnostic } = await searchWithFallback(trimmed, tmdbApiKey, omdbApiKey, controller.signal, providerMode);
+
+        if (!controller.signal.aborted && searchId === searchCounterRef.current) {
+          setRemoteResults(items || []);
+          setSearchSource(source);
+          setSearchError(error || null);
+          setSearchDiagnostic(diagnostic || null);
+        }
+      } catch (err: unknown) {
+        if (!controller.signal.aborted && searchId === searchCounterRef.current) {
+          setRemoteResults([]);
+          setSearchSource('empty');
+          const msg = err instanceof Error ? err.message : 'Search request failed';
+          setSearchError(msg);
+        }
       } finally {
-        setIsSearching(false);
+        if (!controller.signal.aborted && searchId === searchCounterRef.current) {
+          setIsSearching(false);
+        }
       }
     }, 180);
 
-    return () => clearTimeout(timer);
-  }, [query, tmdbApiKey]);
+    return () => {
+      clearTimeout(timer);
+      controller.abort();
+    };
+  }, [query, tmdbApiKey, omdbApiKey, providerMode]);
 
-  // Combined and deduplicated results
+  // Helper to normalize strings for clean alphanumeric matching while preserving Unicode letters
+  const normalizeLetters = (str: string): string => {
+    return (str || '')
+      .toLowerCase()
+      .normalize('NFKC')
+      .normalize('NFD')
+      .replace(/[\u0300-\u036f]/g, '')
+      .normalize('NFC')
+      .replace(/[^\p{L}\p{N}\s]/gu, ' ')
+      .replace(/\s+/g, ' ')
+      .trim();
+  };
+
+  // Relevance scorer: prioritizes exact, prefix, cast, and popular consensus matches
+  const calculateQueryRelevance = (item: MediaItem, rawQuery: string): number => {
+    const q = normalizeLetters(rawQuery);
+    if (!q) return 10;
+
+    const title = normalizeLetters(item.title);
+    const orig = normalizeLetters(item.originalTitle);
+    const votes = item.voteCount || 0;
+    const hasPoster = Boolean(item.posterUrl && item.posterUrl.trim().length > 0);
+    const pop = item.popularity || 0;
+    const qAlpha = q.replace(/[^a-z0-9]/g, '');
+    const titleAlpha = title.replace(/[^a-z0-9]/g, '');
+    const origAlpha = orig.replace(/[^a-z0-9]/g, '');
+
+    const isExactTitle = title === q;
+    const isExactOrig = orig === q;
+    const isAlphaExact = qAlpha.length > 2 && (titleAlpha === qAlpha || origAlpha === qAlpha);
+
+    const queryTokens = q.split(' ').filter(Boolean);
+    const titleTokens = title.split(' ').filter(Boolean);
+    const origTokens = orig.split(' ').filter(Boolean);
+
+    let textScore = 0;
+    if (isExactTitle) {
+      textScore = 1400; // Perfect display title match
+    } else if (isExactOrig || isAlphaExact) {
+      textScore = 1200; // Original language or alphanumeric match
+    } else if (title.startsWith(q)) {
+      textScore = 950; // Display title starts with query phrase
+    } else if (orig.startsWith(q)) {
+      textScore = 850;
+    } else if (title.includes(q)) {
+      textScore = 800; // Substring in display title
+    } else if (orig.includes(q)) {
+      textScore = 700;
+    } else {
+      // Multi-word matching
+      const allWordsInTitle = queryTokens.length > 0 && queryTokens.every(qw =>
+        titleTokens.some(tw => tw === qw || tw.startsWith(qw))
+      );
+      const allWordsInOrig = queryTokens.length > 0 && queryTokens.every(qw =>
+        origTokens.some(tw => tw === qw || tw.startsWith(qw))
+      );
+
+      if (allWordsInTitle) {
+        textScore = 750;
+      } else if (allWordsInOrig) {
+        textScore = 650;
+      } else {
+        // Direct cast match check
+        const castMatch = (item.cast || []).some(c => {
+          const cName = normalizeLetters(c.name);
+          return cName === q || cName.startsWith(q) || queryTokens.every(qw => cName.includes(qw));
+        });
+
+        if (castMatch) {
+          textScore = 720;
+        } else {
+          // Partial word match check
+          const anyWordInTitle = queryTokens.some(qw =>
+            titleTokens.some(tw => tw === qw || tw.startsWith(qw))
+          );
+          if (anyWordInTitle) {
+            textScore = 450;
+          } else if (normalizeLetters(item.overview || '').includes(q)) {
+            textScore = 300;
+          } else {
+            // For items returned by OMDb/OMDb search engine, retain base score
+            textScore = 200;
+          }
+        }
+      }
+    }
+
+    // Consensus vote boost & real traffic popularity boost
+    const voteBoost = Math.min(350, Math.log10(Math.max(votes, 1)) * 85);
+    const popBoost = Math.min(250, Math.log10(Math.max(pop, 1) + 1) * 70);
+    const posterModifier = hasPoster ? 50 : 0; // Never subtract or eliminate movies without posters!
+
+    return Math.max(1, textScore + voteBoost + popBoost + posterModifier);
+  };
+
+  // Combined, clean results
   const searchResults = useMemo(() => {
     if (!query.trim()) return localMediaItems.slice(0, 8); // Initial Suggestions
 
-    const lower = query.toLowerCase().trim();
-    const localMatches = localMediaItems.filter(
-      item =>
-        item.title.toLowerCase().includes(lower) ||
-        item.originalTitle.toLowerCase().includes(lower) ||
-        (item.genres || []).some(g => g.toLowerCase().includes(lower)) ||
-        (item.cast || []).some(c => c.name.toLowerCase().includes(lower))
-    );
+    const cleanQ = query.trim();
+    const qNorm = normalizeLetters(cleanQ);
 
-    // Merge remote TMDB results with local matches
-    const merged = [...localMatches];
+    // 1. Filter local matches
+    const localMatches = localMediaItems.filter(item => {
+      const t = normalizeLetters(item.title);
+      const o = normalizeLetters(item.originalTitle);
+      return t.includes(qNorm) || o.includes(qNorm) || qNorm.split(' ').every(w => t.includes(w) || o.includes(w));
+    });
+
+    // 2. Merge local and remote results, deduplicating by ID and title
+    const merged: MediaItem[] = [];
+    const seenIds = new Set<string>();
+    const seenTitles = new Set<string>();
+
+    for (const item of localMatches) {
+      const key = `${item.type}_${normalizeLetters(item.title)}`;
+      if (!seenIds.has(item.id) && !seenTitles.has(key)) {
+        seenIds.add(item.id);
+        seenTitles.add(key);
+        merged.push(item);
+      }
+    }
+
+    // Add ALL remote results returned by the search provider (preserves valid titles)
     for (const rem of remoteResults) {
-      if (!merged.some(m => m.id === rem.id || m.title.toLowerCase() === rem.title.toLowerCase())) {
+      const key = `${rem.type}_${normalizeLetters(rem.title)}`;
+      if (!seenIds.has(rem.id) && !seenTitles.has(key)) {
+        seenIds.add(rem.id);
+        seenTitles.add(key);
         merged.push(rem);
       }
     }
 
-    return merged.filter(item => {
+    // Filter by format (all, movie, tv)
+    const formatFiltered = merged.filter(item => {
       if (formatFilter === 'all') return true;
       return item.type === formatFilter;
+    });
+
+    // 3. Sort by precision relevance score
+    return formatFiltered.sort((a, b) => {
+      const scoreA = calculateQueryRelevance(a, cleanQ);
+      const scoreB = calculateQueryRelevance(b, cleanQ);
+      if (scoreB !== scoreA) {
+        return scoreB - scoreA;
+      }
+      return (b.voteCount || 0) - (a.voteCount || 0);
     });
   }, [query, localMediaItems, remoteResults, formatFilter]);
 
@@ -100,7 +267,7 @@ export const SearchModal: React.FC<SearchModalProps> = ({
       <div className="fixed inset-0" onClick={onClose} />
 
       <div className="relative w-full max-w-2xl bg-[var(--modal-bg)] rounded-3xl shadow-2xl border border-[var(--border-subtle)] text-[var(--text-primary)] z-10 overflow-hidden flex flex-col max-h-[84vh]">
-        {/* Search Input Bar with Custom Colored Search Icon */}
+        {/* Clean, Minimalist Search Input Bar */}
         <div className="p-4 sm:p-5 border-b border-[var(--border-subtle)] flex items-center gap-3 bg-[var(--modal-bg)]">
           {isSearching ? (
             <Loader2 className="w-5 h-5 text-[var(--accent-primary)] stroke-[2.5] animate-spin flex-none" />
@@ -112,73 +279,303 @@ export const SearchModal: React.FC<SearchModalProps> = ({
             type="text"
             value={query}
             onChange={e => setQuery(e.target.value)}
-            placeholder="Search TMDB movies, TV series, actors, directors..."
+            placeholder="Search movies, series, actors..."
             className="w-full bg-transparent text-base sm:text-lg font-semibold text-[var(--text-primary)] placeholder:text-[var(--text-muted)] focus:outline-none"
           />
           {query && (
             <button
+              type="button"
               onClick={() => setQuery('')}
               className="p-1 rounded-full text-[var(--text-secondary)] hover:text-[var(--text-primary)]"
+              title="Clear search"
             >
               <X className="w-4 h-4" />
             </button>
           )}
+
+          {/* Filled Blood Red Cross Close Button */}
           <button
+            type="button"
             onClick={onClose}
-            className="p-2 rounded-full bg-[var(--bg-card-yellow)] hover:opacity-90 text-[var(--text-card-yellow)] transition focus:outline-none text-xs font-bold px-3 shadow-3xs"
+            className="p-2 rounded-full bg-red-600 hover:bg-red-700 active:scale-95 text-white transition focus:outline-none shadow-sm shrink-0 flex items-center justify-center"
+            title="Close search (Esc)"
+            aria-label="Close search"
           >
-            Esc
+            <X className="w-4 h-4 stroke-[2.5]" />
           </button>
         </div>
 
-        {/* Format Selector Pills & Diagnostic status */}
-        <div className="px-5 py-2.5 bg-[var(--bg-card-yellow)] text-[var(--text-card-yellow)] flex items-center justify-between text-xs shadow-2xs">
-          <div className="flex items-center gap-1.5">
+        {/* Collapsible "More" Options Drawer */}
+        {isMoreOpen && (
+          <div className="p-3.5 sm:p-4 bg-[var(--bg-surface-elevated)] border-b border-[var(--border-subtle)] space-y-3 animate-fade-in text-xs">
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              {/* Type Format Filters */}
+              <div className="flex items-center gap-1.5">
+                <span className="text-[11px] font-bold text-[var(--text-secondary)] mr-1">Type:</span>
+                <button
+                  type="button"
+                  onClick={() => setFormatFilter('all')}
+                  className={`px-3 py-1 rounded-full font-bold transition text-xs ${
+                    formatFilter === 'all'
+                      ? 'bg-[var(--accent-primary)] text-[var(--bg-primary)] shadow-xs'
+                      : 'bg-[var(--bg-surface-card)] text-[var(--text-secondary)] hover:text-[var(--text-primary)]'
+                  }`}
+                >
+                  All
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setFormatFilter('movie')}
+                  className={`px-3 py-1 rounded-full font-bold transition text-xs ${
+                    formatFilter === 'movie'
+                      ? 'bg-[var(--accent-primary)] text-[var(--bg-primary)] shadow-xs'
+                      : 'bg-[var(--bg-surface-card)] text-[var(--text-secondary)] hover:text-[var(--text-primary)]'
+                  }`}
+                >
+                  Movies
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setFormatFilter('tv')}
+                  className={`px-3 py-1 rounded-full font-bold transition text-xs ${
+                    formatFilter === 'tv'
+                      ? 'bg-[var(--accent-primary)] text-[var(--bg-primary)] shadow-xs'
+                      : 'bg-[var(--bg-surface-card)] text-[var(--text-secondary)] hover:text-[var(--text-primary)]'
+                  }`}
+                >
+                  Series
+                </button>
+              </div>
+
+              {/* API Provider Selection */}
+              <div className="flex items-center gap-1.5">
+                <span className="text-[11px] font-bold text-[var(--text-secondary)] mr-1">Provider:</span>
+                <button
+                  type="button"
+                  onClick={() => setProviderMode('auto')}
+                  className={`px-2.5 py-1 rounded-full font-bold text-xs flex items-center gap-1 transition ${
+                    providerMode === 'auto'
+                      ? 'bg-indigo-600 text-white shadow-xs'
+                      : 'bg-[var(--bg-surface-card)] text-[var(--text-secondary)] hover:text-[var(--text-primary)]'
+                  }`}
+                >
+                  <span className="w-1.5 h-1.5 rounded-full bg-indigo-400" />
+                  Auto
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setProviderMode('tmdb')}
+                  className={`px-2.5 py-1 rounded-full font-bold text-xs flex items-center gap-1 transition ${
+                    providerMode === 'tmdb'
+                      ? 'bg-emerald-600 text-white shadow-xs'
+                      : 'bg-[var(--bg-surface-card)] text-[var(--text-secondary)] hover:text-[var(--text-primary)]'
+                  }`}
+                >
+                  <span className="w-1.5 h-1.5 rounded-full bg-emerald-400" />
+                  TMDB
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setProviderMode('omdb')}
+                  className={`px-2.5 py-1 rounded-full font-bold text-xs flex items-center gap-1 transition ${
+                    providerMode === 'omdb'
+                      ? 'bg-amber-600 text-white shadow-xs'
+                      : 'bg-[var(--bg-surface-card)] text-[var(--text-secondary)] hover:text-[var(--text-primary)]'
+                  }`}
+                >
+                  <span className="w-1.5 h-1.5 rounded-full bg-amber-400" />
+                  OMDb
+                </button>
+              </div>
+
+              {/* IMDb Link Import Modal Action */}
+              {onOpenImdbPreview && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    onClose();
+                    onOpenImdbPreview(query);
+                  }}
+                  className="px-2.5 py-1 rounded-full bg-[#F5C518] hover:bg-[#e4b712] text-black font-black text-xs flex items-center gap-1 transition active:scale-95 shrink-0 shadow-2xs"
+                >
+                  <span>IMDb Import</span>
+                </button>
+              )}
+            </div>
+
+            {/* Diagnostic Toggle & Source Link */}
+            <div className="pt-2 border-t border-[var(--border-subtle)] flex items-center justify-between text-[11px] text-[var(--text-secondary)]">
+              <div className="flex items-center gap-2">
+                <span>Active engine:</span>
+                <span className="font-bold text-[var(--text-primary)]">
+                  {searchSource === 'tmdb'
+                    ? 'TMDB Secret Proxy'
+                    : searchSource === 'omdb'
+                    ? 'OMDb API'
+                    : searchSource === 'cache'
+                    ? 'Offline Cache'
+                    : 'Auto Fallback'}
+                </span>
+                {searchDiagnostic && <span className="opacity-70 font-mono">({searchDiagnostic.durationMs}ms)</span>}
+              </div>
+
+              <button
+                type="button"
+                onClick={() => setShowDiagnosticPanel(!showDiagnosticPanel)}
+                className="text-[11px] text-[var(--accent-primary)] font-bold hover:underline"
+              >
+                {showDiagnosticPanel ? 'Hide Diagnostic Logs' : 'View Diagnostic Logs'}
+              </button>
+            </div>
+          </div>
+        )}
+
+        {/* Minimal Sub-bar for Results Counter Status when More panel is closed */}
+        {!isMoreOpen && (
+          <div className="px-5 py-2 bg-[var(--bg-surface-elevated)] border-b border-[var(--border-subtle)] flex items-center justify-between text-xs text-[var(--text-secondary)]">
+            <div className="flex items-center gap-2 font-bold tabular-nums">
+              {isSearching ? (
+                <span className="flex items-center gap-1.5 text-[var(--accent-primary)] animate-pulse">
+                  <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                  Searching {providerMode === 'tmdb' ? 'TMDB' : providerMode === 'omdb' ? 'OMDb' : 'catalog'}...
+                </span>
+              ) : searchError ? (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setIsMoreOpen(true);
+                    setShowDiagnosticPanel(true);
+                  }}
+                  className="flex items-center gap-1 text-rose-500 hover:underline"
+                >
+                  <AlertCircle className="w-3.5 h-3.5" />
+                  <span>Request issue - click for details</span>
+                </button>
+              ) : searchSource === 'tmdb' ? (
+                <span className="flex items-center gap-1.5 text-emerald-600 dark:text-emerald-400">
+                  <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 shadow-[0_0_6px_rgba(52,211,153,0.7)]" />
+                  <span>TMDB · {searchResults.length} {searchResults.length === 1 ? 'result' : 'results'}</span>
+                  {searchDiagnostic && <span className="text-[10px] opacity-70 font-mono">({searchDiagnostic.durationMs}ms)</span>}
+                </span>
+              ) : searchSource === 'omdb' ? (
+                <span className="flex items-center gap-1.5 text-amber-600 dark:text-amber-400">
+                  <span className="w-1.5 h-1.5 rounded-full bg-amber-500" />
+                  <span>OMDb {providerMode === 'auto' ? 'Fallback' : ''} · {searchResults.length} {searchResults.length === 1 ? 'result' : 'results'}</span>
+                  {searchDiagnostic && <span className="text-[10px] opacity-70 font-mono">({searchDiagnostic.durationMs}ms)</span>}
+                </span>
+              ) : searchSource === 'cache' ? (
+                <span className="flex items-center gap-1.5">
+                  <Database className="w-3.5 h-3.5 text-blue-400" />
+                  <span>Offline Cache · {searchResults.length} {searchResults.length === 1 ? 'result' : 'results'}</span>
+                </span>
+              ) : (
+                <span className="flex items-center gap-1.5">
+                  <span className="w-1.5 h-1.5 rounded-full bg-[var(--accent-primary)]" />
+                  <span>
+                    {query.trim()
+                      ? 'No matches found'
+                      : `Featured · ${searchResults.length} ${searchResults.length === 1 ? 'title' : 'titles'}`}
+                  </span>
+                </span>
+              )}
+            </div>
+
             <button
-              onClick={() => setFormatFilter('all')}
-              className={`px-3 py-1 rounded-full font-bold transition text-xs ${
-                formatFilter === 'all'
-                  ? 'bg-[var(--accent-primary)] text-[var(--bg-primary)] shadow-xs'
-                  : 'text-[var(--text-card-yellow)] opacity-75 hover:opacity-100'
-              }`}
+              type="button"
+              onClick={() => setIsMoreOpen(!isMoreOpen)}
+              className="text-[11px] font-bold text-[var(--accent-primary)] hover:underline flex items-center gap-1 select-none"
             >
-              All
-            </button>
-            <button
-              onClick={() => setFormatFilter('movie')}
-              className={`px-3 py-1 rounded-full font-bold transition text-xs ${
-                formatFilter === 'movie'
-                  ? 'bg-[var(--accent-primary)] text-[var(--bg-primary)] shadow-xs'
-                  : 'text-[var(--text-card-yellow)] opacity-75 hover:opacity-100'
-              }`}
-            >
-              Movies
-            </button>
-            <button
-              onClick={() => setFormatFilter('tv')}
-              className={`px-3 py-1 rounded-full font-bold transition text-xs ${
-                formatFilter === 'tv'
-                  ? 'bg-[var(--accent-primary)] text-[var(--bg-primary)] shadow-xs'
-                  : 'text-[var(--text-card-yellow)] opacity-75 hover:opacity-100'
-              }`}
-            >
-              Series
+              <span>Options</span>
+              <ChevronDown className={`w-3 h-3 transition-transform duration-200 ${isMoreOpen ? 'rotate-180' : ''}`} />
             </button>
           </div>
+        )}
 
-          <div className="flex items-center gap-2 text-[var(--text-card-yellow)] tabular-nums font-bold text-xs">
-            {isSearching ? (
-              <span className="flex items-center gap-1">
-                Searching TMDB...
+        {/* Diagnostic Panel Dropdown */}
+        {showDiagnosticPanel && searchDiagnostic && (
+          <div className="p-3.5 bg-black/85 text-zinc-200 border-b border-zinc-700 text-xs space-y-2 animate-fade-in font-mono">
+            <div className="flex items-center justify-between font-bold text-zinc-100">
+              <span className="flex items-center gap-1.5">
+                <Info className="w-3.5 h-3.5 text-indigo-400" />
+                <span>Search Diagnostics</span>
               </span>
-            ) : (
-              <span>{searchResults.length} {searchResults.length === 1 ? 'result' : 'results'}</span>
+              <button
+                onClick={() => setShowDiagnosticPanel(false)}
+                className="text-[11px] text-zinc-400 hover:text-white"
+              >
+                Close
+              </button>
+            </div>
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 text-[11px]">
+              <div className="p-2 rounded-lg bg-zinc-900 border border-zinc-800">
+                <div className="text-zinc-400 text-[10px]">Provider</div>
+                <div className="font-bold uppercase text-white">{searchDiagnostic.provider}</div>
+              </div>
+              <div className="p-2 rounded-lg bg-zinc-900 border border-zinc-800">
+                <div className="text-zinc-400 text-[10px]">HTTP Status</div>
+                <div className={`font-bold ${searchDiagnostic.httpStatus === 200 ? 'text-emerald-400' : 'text-rose-400'}`}>
+                  {searchDiagnostic.httpStatus ? `HTTP ${searchDiagnostic.httpStatus}` : 'Network / Abort'}
+                </div>
+              </div>
+              <div className="p-2 rounded-lg bg-zinc-900 border border-zinc-800">
+                <div className="text-zinc-400 text-[10px]">Latency</div>
+                <div className="font-bold text-white">{searchDiagnostic.durationMs} ms</div>
+              </div>
+              <div className="p-2 rounded-lg bg-zinc-900 border border-zinc-800">
+                <div className="text-zinc-400 text-[10px]">Raw / Rendered</div>
+                <div className="font-bold text-white">
+                  {searchDiagnostic.rawResultsCount} raw → {searchResults.length} shown
+                </div>
+              </div>
+            </div>
+            {searchDiagnostic.errorMessage && (
+              <div className="p-2 rounded-lg bg-rose-950/60 border border-rose-800/80 text-rose-200 text-[11px]">
+                <strong>Error: </strong>{searchDiagnostic.errorMessage}
+              </div>
+            )}
+            {searchDiagnostic.fallbackAttempted && (
+              <div className="text-[11px] text-amber-300">
+                Automatic fallback: {searchDiagnostic.fallbackSucceeded ? `Engaged ${searchDiagnostic.fallbackSource || 'OMDb'}` : 'Attempted, no fallback matches'}
+              </div>
             )}
           </div>
-        </div>
+        )}
 
         {/* Results List */}
         <div className="flex-1 overflow-y-auto p-4 sm:p-5 space-y-2">
+          {/* Explicit Error State Banner */}
+          {!isSearching && searchError && (
+            <div className="p-4 rounded-2xl bg-rose-500/10 border border-rose-500/30 text-rose-600 dark:text-rose-400 text-xs space-y-2 mb-2 animate-fade-in shadow-xs">
+              <div className="font-bold flex items-center gap-2">
+                <AlertCircle className="w-4 h-4 shrink-0 text-rose-500" />
+                <span>Search Provider Issue: {providerMode.toUpperCase()}</span>
+              </div>
+              <p className="text-xs opacity-90 leading-relaxed">
+                {searchError}
+              </p>
+              <div className="flex items-center gap-2 pt-1">
+                {false && (
+                  <button
+                    type="button"
+                    onClick={() => setProviderMode('auto')}
+                    className="px-3 py-1.5 rounded-full bg-[var(--accent-primary)] text-[var(--bg-primary)] font-bold text-xs hover:opacity-90 transition active:scale-95"
+                  >
+                    Switch to Auto Fallback
+                  </button>
+                )}
+                {providerMode !== 'omdb' && (
+                  <button
+                    type="button"
+                    onClick={() => setProviderMode('omdb')}
+                    className="px-3 py-1.5 rounded-full bg-amber-500/20 text-amber-600 dark:text-amber-300 font-bold text-xs hover:bg-amber-500/30 transition active:scale-95"
+                  >
+                    Try OMDb Provider
+                  </button>
+                )}
+              </div>
+            </div>
+          )}
+
           {!query.trim() && (
             <div className="text-xs font-bold uppercase tracking-widest text-[var(--text-secondary)] px-1 mb-2">
               Featured in Library
@@ -214,6 +611,7 @@ export const SearchModal: React.FC<SearchModalProps> = ({
                   <div className="w-12 h-16 flex-none rounded-xl overflow-hidden bg-[var(--bg-surface-elevated)] shadow-xs">
                     <SafeImage
                       src={item.posterUrl}
+                      fallbackSrc={item.fallbackPosterUrl}
                       alt={item.title}
                       fallbackTitle={item.title}
                       className="w-full h-full object-cover"
@@ -228,30 +626,63 @@ export const SearchModal: React.FC<SearchModalProps> = ({
                       <span>{item.year || '2025'}</span>
                       <span aria-hidden="true">·</span>
                       <span className="capitalize">{item.type === 'tv' ? 'Series' : 'Movie'}</span>
-                      {item.tmdbRating > 0 && (
+                      {item.originalTitle && item.originalTitle.trim().toLowerCase() !== item.title.trim().toLowerCase() && (
+                        <>
+                          <span aria-hidden="true">·</span>
+                          <span className="truncate max-w-[140px] opacity-75 font-normal italic" title={`Original title: ${item.originalTitle}`}>
+                            {item.originalTitle}
+                          </span>
+                        </>
+                      )}
+                      {item.imdbRating && item.imdbRating > 0 ? (
+                        <>
+                          <span aria-hidden="true">·</span>
+                          <span className="inline-flex items-center gap-0.5 font-semibold text-[var(--accent-primary)]">
+                            <Star className="w-3 h-3 fill-current text-amber-500" />
+                            {item.imdbRating.toFixed(1)}
+                            {item.voteCount && item.voteCount > 0 ? (
+                              <span className="text-[10px] text-[var(--text-secondary)] font-normal ml-0.5">
+                                ({item.voteCount >= 1000 ? `${(item.voteCount / 1000).toFixed(1)}k` : item.voteCount})
+                              </span>
+                            ) : null}
+                          </span>
+                        </>
+                      ) : (item.imdbRating || 0) > 0 ? (
                         <>
                           <span aria-hidden="true">·</span>
                           <span className="inline-flex items-center gap-0.5 font-semibold text-[var(--accent-primary)]">
                             <Star className="w-3 h-3 fill-current text-[var(--accent-secondary)]" />
-                            {item.tmdbRating.toFixed(1)}
+                            {(item.imdbRating || 0).toFixed(1)}
+                            {item.voteCount && item.voteCount > 0 ? (
+                              <span className="text-[10px] text-[var(--text-secondary)] font-normal ml-0.5">
+                                ({item.voteCount >= 1000 ? `${(item.voteCount / 1000).toFixed(1)}k` : item.voteCount})
+                              </span>
+                            ) : null}
                           </span>
                         </>
-                      )}
+                      ) : null}
                     </div>
 
-                    {/* MAX 2 GENRES IN SEARCH TITLES */}
-                    {item.genres && item.genres.length > 0 && (
-                      <div className="flex flex-wrap gap-1 mt-1.5">
-                        {item.genres.slice(0, 2).map(g => (
-                          <span
-                            key={g}
-                            className="px-2 py-0.5 rounded-full bg-[var(--chip-bg)] text-[var(--chip-text)] text-[10px] font-bold"
-                          >
-                            {g}
-                          </span>
-                        ))}
-                      </div>
-                    )}
+                    {/* Provider badge and max 2 genres */}
+                    <div className="flex flex-wrap items-center gap-1 mt-1.5">
+                      {item.metadataSource === 'tmdb' || item.tmdbId ? (
+                        <span className="px-1.5 py-0.5 rounded-md bg-emerald-500/15 text-emerald-600 dark:text-emerald-400 text-[9.5px] font-extrabold uppercase tracking-wide border border-emerald-500/20">
+                          TMDB
+                        </span>
+                      ) : item.metadataSource === 'omdb' || item.imdbId ? (
+                        <span className="px-1.5 py-0.5 rounded-md bg-amber-500/15 text-amber-600 dark:text-amber-400 text-[9.5px] font-extrabold uppercase tracking-wide border border-amber-500/20">
+                          OMDb
+                        </span>
+                      ) : null}
+                      {item.genres && item.genres.slice(0, 2).map(g => (
+                        <span
+                          key={g}
+                          className="px-2 py-0.5 rounded-full bg-[var(--chip-bg)] text-[var(--chip-text)] text-[10px] font-bold"
+                        >
+                          {g}
+                        </span>
+                      ))}
+                    </div>
                   </div>
                 </div>
 
