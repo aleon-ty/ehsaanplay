@@ -34,7 +34,7 @@
 >
 > We're working on exciting new features to make your experience better!
 
-- ❌ **Multi-API Fallback Support**
+- ✔ **Multi-API Fallback Support** (13/10/2026)
 -  ✔ **Local Wi-Fi Peer-to-Peer Sync** *(Beta)*
 - ✔ **Built-in Trailer Player**
 - ❌ **Beautiful Analytics Page**
