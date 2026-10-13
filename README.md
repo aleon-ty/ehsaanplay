@@ -41,7 +41,7 @@
 - ❌ **Automatic Backup to a Chosen Folder**
 -  ✔ **Beautiful First-Visit Guide** (v2.2.9)
 -  ✔ **Personal Favourites Category** — by [@thmeo07](https://github.com/thmeo07)
--  ✔ **Long-Press Popup Menu** inside movie image cards — by [@aleon-ty](https://github.com/aleon-ty) (v2.3.0)
+-  ✔ **Long-Press Popup Menu** inside movie image cards — by [@aleon-ty](https://github.com/ehsaanullah0/ehsaanplay/pull/7) (v2.3.0)
 -  ❌**introduce direct web search result into app**
 -  ✔ **add imdb link metadata crowl as fallback of every service.**
 
