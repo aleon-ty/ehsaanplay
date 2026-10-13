@@ -36,12 +36,12 @@
 
 - ✔ **Multi-API Fallback Support** (v2.3.0)
 -  ✔ **Local Wi-Fi Peer-to-Peer Sync** *(Beta)*
-- ✔ **Built-in Trailer Player**
+- ✔ **Built-in Trailer Player** (v2.1.9)
 - ❌ **Beautiful Analytics Page**
 - ❌ **Automatic Backup to a Chosen Folder**
--  ✔ **Beautiful First-Visit Guide**
+-  ✔ **Beautiful First-Visit Guide** (v2.2.9)
 -  ✔ **Personal Favourites Category** — by [@thmeo07](https://github.com/thmeo07)
--  ✔ **Long-Press Popup Menu** inside movie image cards — by [@aleon-ty](https://github.com/aleon-ty)
+-  ✔ **Long-Press Popup Menu** inside movie image cards — by [@aleon-ty](https://github.com/aleon-ty) (v2.3.0)
 -  ❌**introduce direct web search result into app**
 -  ✔ **add imdb link metadata crowl as fallback of every service.**
 
