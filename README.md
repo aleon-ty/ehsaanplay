@@ -34,14 +34,14 @@
 >
 > We're working on exciting new features to make your experience better!
 
-- ✔ **Multi-API Fallback Support** (v2.3.0)
+- ✔ **Multi-API Fallback Support** (v2.3.0) -by [@aleon-ty](https://github.com/ehsaanullah0/ehsaanplay/pull/7)
 -  ✔ **Local Wi-Fi Peer-to-Peer Sync** *(Beta)*
 - ✔ **Built-in Trailer Player** (v2.1.9)
 - ❌ **Beautiful Analytics Page**
 - ❌ **Automatic Backup to a Chosen Folder**
 -  ✔ **Beautiful First-Visit Guide** (v2.2.9)
--  ✔ **Personal Favourites Category** — by [@thmeo07](https://github.com/thmeo07)
--  ✔ **Long-Press Popup Menu** inside movie image cards — by [@aleon-ty](https://github.com/ehsaanullah0/ehsaanplay/pull/7) (v2.3.0)
+-  ✔ **Personal Favourites Category** — by [@thmeo07](https://github.com/ehsaanullah0/ehsaanplay/pull/3)
+-  ✔ **Long-Press Popup Menu** inside movie image cards — by [@aleon-ty](https://github.com/ehsaanullah0/ehsaanplay/pull/4) (v2.3.0)
 -  ❌**introduce direct web search result into app**
 -  ✔ **add imdb link metadata crowl as fallback of every service.**
 
