@@ -72,10 +72,10 @@ export const LibraryStats: React.FC<LibraryStatsProps> = ({
         <p className="text-xs sm:text-sm text-[var(--text-secondary)]">
           {stats.totalHours > 0 ? (
             <span>
-              <strong className="text-[var(--text-primary)] tabular-nums font-semibold">{stats.totalHours} hrs</strong> logged in your journal
+              <strong className="text-[var(--text-primary)] tabular-nums font-semibold">{stats.totalHours} hrs</strong> total watch time
             </span>
           ) : (
-            'Track what you love, at your own pace.'
+            'Track your collection and watch history.'
           )}
         </p>
       </div>

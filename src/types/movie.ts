@@ -18,15 +18,29 @@ export interface WatchProvider {
   logoUrl?: string;
 }
 
+export interface EpisodeDetail {
+  episodeNumber: number;
+  seasonNumber: number;
+  title: string;
+  overview?: string;
+  airDate?: string;
+  stillUrl?: string;
+  rating?: number;
+  runtime?: number;
+}
+
 export interface SeasonInfo {
   seasonNumber: number;
   name: string;
   episodeCount: number;
+  episodes?: EpisodeDetail[];
+  posterUrl?: string;
+  airDate?: string;
 }
 
 export interface MediaItem {
   id: string;
-  tmdbId: number;
+  
   type: MediaType;
   title: string;
   originalTitle: string;
@@ -36,11 +50,14 @@ export interface MediaItem {
   seasonsCount?: number; // for TV series
   episodesCount?: number; // for TV series
   seasons?: SeasonInfo[]; // per-season breakdown for TV series
+  episodesList?: EpisodeDetail[]; // detailed episode list across seasons
   overview: string;
   tagline?: string;
   posterUrl: string;
   backdropUrl: string;
-  tmdbRating: number;
+  
+  tmdbId?: number;
+  tmdbRating?: number;
   voteCount: number;
   genres: string[];
   cast: CastMember[];
@@ -53,6 +70,11 @@ export interface MediaItem {
   language?: string;
   budget?: string;
   boxOffice?: string;
+  imdbId?: string;
+  imdbRating?: number; // Preserves source of rating
+  popularity?: number; // Popularity score for clean ranking
+  metadataSource?: 'tmdb' | 'omdb' | 'cache';
+  fallbackPosterUrl?: string; // Poster fallback
 }
 
 export interface EpisodeState {
@@ -73,6 +95,7 @@ export interface PersonalMediaState {
   inWatchlist: boolean;
   isWatched: boolean;
   isFavorite: boolean;
+  favoritedAt?: string;
   personalRating?: number; // 1 to 10
   notes?: string;
   progressPercent?: number; // 0 to 100
@@ -136,6 +159,8 @@ export interface AppTweaksConfig {
   showWatchlistButton?: boolean; // Default: true
   swapSearchAndLists?: boolean; // Default: false (exchange search bar & custom lists positions)
   longPressBatchSelection?: boolean; // Default: false (enable long-press to enter batch-selection in Watchlist)
+  favoritesLayout?: 'horizontal' | 'vertical'; // Default: 'horizontal' (Personal favorites display format)
+  showFooterShowcase?: boolean; // Default: true (Bottom footer showcase visibility)
 }
 
 export const DEFAULT_APP_TWEAKS: AppTweaksConfig = {
@@ -155,6 +180,8 @@ export const DEFAULT_APP_TWEAKS: AppTweaksConfig = {
   showWatchlistButton: true,
   swapSearchAndLists: false,
   longPressBatchSelection: false,
+  favoritesLayout: 'horizontal',
+  showFooterShowcase: true,
 };
 
 export interface UserSettings {
@@ -163,6 +190,7 @@ export interface UserSettings {
   previewButtonFormat?: 'full' | 'icon-only';
   backdropOpacity: number; // 0.0 to 1.0 (default 0.40)
   tmdbApiKey?: string;
+  omdbApiKey?: string;
   viewMode: 'grid' | 'cards';
   posterQuality: 'standard' | 'high';
   homeSections?: HomeSectionsConfig;

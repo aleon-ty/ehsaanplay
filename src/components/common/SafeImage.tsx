@@ -6,6 +6,7 @@ import { useOnlineStatus } from '../../hooks/usePWAInstall';
 
 interface SafeImageProps extends React.ImgHTMLAttributes<HTMLImageElement> {
   fallbackTitle?: string;
+  fallbackSrc?: string;
   containerClassName?: string;
   size?: 'w342' | 'w500' | 'w780' | 'original';
   forceOffline?: boolean;
@@ -17,6 +18,7 @@ export const SafeImage: React.FC<SafeImageProps> = ({
   src,
   alt,
   fallbackTitle,
+  fallbackSrc,
   className = '',
   containerClassName = '',
   style,
@@ -26,6 +28,7 @@ export const SafeImage: React.FC<SafeImageProps> = ({
   ...props
 }) => {
   const isOnline = useOnlineStatus();
+  const triedFallbackRef = useRef<boolean>(false);
   const [isStorageOffline, setIsStorageOffline] = useState<boolean>(() => {
     try {
       if (typeof window !== 'undefined') {
@@ -83,6 +86,7 @@ export const SafeImage: React.FC<SafeImageProps> = ({
     const currentSrc = src;
     currentReqRef.current = currentSrc || null;
 
+    triedFallbackRef.current = false;
     setHasError(false);
     setIsLoading(true);
 
@@ -119,7 +123,16 @@ export const SafeImage: React.FC<SafeImageProps> = ({
   }, [src, isOffline, size]);
 
   const handleImageError = () => {
-    // Attempt fallback from offline cache first if not already a blob URL
+    // 1. If fallbackSrc is available and hasn't been tried yet, try it immediately
+    if (fallbackSrc && !triedFallbackRef.current && fallbackSrc !== resolvedSrc && fallbackSrc.startsWith('http')) {
+      triedFallbackRef.current = true;
+      setResolvedSrc(fallbackSrc);
+      setIsLoading(false);
+      setHasError(false);
+      return;
+    }
+
+    // 2. Attempt fallback from offline cache first if not already a blob URL
     if (src && !resolvedSrc?.startsWith('blob:')) {
       getArtworkDisplaySrc(src, true, size)
         .then(cachedBlobUrl => {

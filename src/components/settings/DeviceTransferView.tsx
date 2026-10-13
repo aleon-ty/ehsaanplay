@@ -754,9 +754,6 @@ export const DeviceTransferView: React.FC<DeviceTransferViewProps> = ({
         >
           <FileJson className="w-4 h-4 stroke-[2.5]" />
           <span className="font-extrabold">Change-JSON</span>
-          <span className="hidden sm:inline-block px-2 py-0.5 rounded-full text-[9px] uppercase font-mono tracking-wider bg-black/15 dark:bg-white/15 font-black">
-            ⭐ Recommended
-          </span>
         </button>
 
         <button
@@ -770,6 +767,9 @@ export const DeviceTransferView: React.FC<DeviceTransferViewProps> = ({
         >
           <Wifi className="w-4 h-4 stroke-[2.5]" />
           <span className="font-extrabold">Local Wi-Fi (P2P)</span>
+          <span className="px-2 py-0.5 rounded-full text-[9px] uppercase font-mono tracking-wider bg-black/15 dark:bg-white/15 font-black">
+            Beta
+          </span>
         </button>
       </div>
 
@@ -888,11 +888,8 @@ export const DeviceTransferView: React.FC<DeviceTransferViewProps> = ({
                     <FileJson className="w-5 h-5" />
                   </div>
                   <div>
-                    <h4 className="font-black text-base text-[var(--text-primary)] flex items-center gap-2">
-                      <span>JSON File Transfer</span>
-                      <span className="px-2.5 py-0.5 rounded-full text-[9px] uppercase font-mono bg-[var(--accent-primary)] text-[var(--bg-primary)] font-black">
-                        ⭐ Primary Method
-                      </span>
+                    <h4 className="font-black text-base text-[var(--text-primary)]">
+                      JSON File Transfer
                     </h4>
                     <p className="text-xs text-[var(--text-secondary)] mt-0.5">
                       Export lightweight changes file (`.json`) and import it on your other device

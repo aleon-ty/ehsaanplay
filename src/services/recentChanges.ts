@@ -163,12 +163,11 @@ export function recordLibraryChange(
   let sanitizedData = data;
   if (data?.mediaItem) {
     const m = data.mediaItem;
-    // Keep only compact relative TMDB path or URL, never base64 data URLs
     const cleanPoster = typeof m.posterUrl === 'string' && !m.posterUrl.startsWith('data:') && !m.posterUrl.startsWith('blob:')
-      ? (m.posterUrl.startsWith('https://image.tmdb.org/t/p/') ? m.posterUrl.replace(/^https:\/\/image\.tmdb\.org\/t\/p\/(w\d+|original)/, '') : m.posterUrl)
+      ? m.posterUrl
       : undefined;
     const cleanBackdrop = typeof m.backdropUrl === 'string' && !m.backdropUrl.startsWith('data:') && !m.backdropUrl.startsWith('blob:')
-      ? (m.backdropUrl.startsWith('https://image.tmdb.org/t/p/') ? m.backdropUrl.replace(/^https:\/\/image\.tmdb\.org\/t\/p\/(w\d+|original)/, '') : m.backdropUrl)
+      ? m.backdropUrl
       : undefined;
 
     sanitizedData = {
@@ -178,8 +177,6 @@ export function recordLibraryChange(
         title: m.title,
         type: m.type,
         year: m.year,
-        tmdbId: m.tmdbId,
-        tmdbRating: m.tmdbRating,
         genres: m.genres,
         runtime: m.runtime,
         overview: m.overview ? m.overview.slice(0, 200) : undefined,
@@ -279,8 +276,6 @@ export function reconstructChangeLogFromLibrary(force = false): void {
               title: item.title,
               type: item.type,
               year: item.year,
-              tmdbId: item.tmdbId,
-              tmdbRating: item.tmdbRating,
               genres: item.genres,
               posterUrl: item.posterUrl,
             },
@@ -549,10 +544,10 @@ export function applyRecentChanges(pkg: RecentChangesPackage): ApplyChangesResul
           const incomingItem = data.mediaItem as MediaItem;
           if (!mediaMap.has(entityId)) {
             const resolvedPoster = incomingItem.posterUrl?.startsWith('/')
-              ? `https://image.tmdb.org/t/p/w500${incomingItem.posterUrl}`
+              ? `${incomingItem.posterUrl}`
               : incomingItem.posterUrl;
             const resolvedBackdrop = incomingItem.backdropUrl?.startsWith('/')
-              ? `https://image.tmdb.org/t/p/original${incomingItem.backdropUrl}`
+              ? `${incomingItem.backdropUrl}`
               : incomingItem.backdropUrl;
 
             // New item to add
@@ -563,8 +558,6 @@ export function applyRecentChanges(pkg: RecentChangesPackage): ApplyChangesResul
               releaseDate: incomingItem.releaseDate || (incomingItem.year ? `${incomingItem.year}-01-01` : ''),
               type: incomingItem.type || 'movie',
               year: incomingItem.year || 2024,
-              tmdbId: incomingItem.tmdbId || 0,
-              tmdbRating: incomingItem.tmdbRating || 0,
               genres: incomingItem.genres || [],
               runtime: incomingItem.runtime,
               overview: incomingItem.overview || '',

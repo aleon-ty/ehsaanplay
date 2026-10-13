@@ -1,4 +1,4 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect } from 'react';
 import {
   MediaItem,
   PersonalMediaState,
@@ -20,6 +20,8 @@ import {
   Share2,
   Trash2,
   Download,
+  CheckSquare,
+  Copy,
 } from 'lucide-react';
 import { getNextChangeId, LibraryChangeEntry, RecentChangesPackage } from '../../services/recentChanges';
 
@@ -68,15 +70,25 @@ export const WatchlistView: React.FC<WatchlistViewProps> = ({
     ...DEFAULT_FILTERS,
     status: (initialFilterStatus as FilterState['status']) || 'watchlist',
   });
+
+  useEffect(() => {
+    if (initialFilterStatus) {
+      setFilters(prev => ({
+        ...prev,
+        status: (initialFilterStatus as FilterState['status']) || 'watchlist',
+      }));
+    }
+  }, [initialFilterStatus]);
   const [isFilterSheetOpen, setIsFilterSheetOpen] = useState(false);
   const [randomItem, setRandomItem] = useState<MediaItem | null>(null);
   const [isRandomModalOpen, setIsRandomModalOpen] = useState(false);
 
   // Batch Selection state
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+  const [isBatchModeActive, setIsBatchModeActive] = useState(false);
   const [isShareModalOpen, setIsShareModalOpen] = useState(false);
 
-  const isSelectionModeActive = selectedIds.size > 0;
+  const isSelectionModeActive = isBatchModeActive || selectedIds.size > 0;
 
   const handleToggleItemSelection = (id: string) => {
     setSelectedIds(prev => {
@@ -90,10 +102,17 @@ export const WatchlistView: React.FC<WatchlistViewProps> = ({
     });
   };
 
-  const handleLongPressItem = (id: string) => {
-    if (settings?.tweaks?.longPressBatchSelection) {
-      handleToggleItemSelection(id);
+  const handleToggleSelectAll = () => {
+    if (selectedIds.size === filteredItems.length && filteredItems.length > 0) {
+      setSelectedIds(new Set());
+    } else {
+      setSelectedIds(new Set(filteredItems.map(i => i.id)));
     }
+  };
+
+  const handleLongPressItem = (id: string) => {
+    setIsBatchModeActive(true);
+    handleToggleItemSelection(id);
   };
 
   // Helper to create a change package for only selected items
@@ -200,15 +219,42 @@ export const WatchlistView: React.FC<WatchlistViewProps> = ({
     }
   };
 
+  const [copyCodeSuccess, setCopyCodeSuccess] = useState(false);
+
+  // Copy Change JSON code directly to clipboard
+  const handleBatchCopyCode = async () => {
+    try {
+      const selectedList = Array.from(selectedIds);
+      const pkg = createSelectedItemsChangePackage(selectedList, mediaItems, userStates);
+      const jsonString = JSON.stringify(pkg, null, 2);
+      await navigator.clipboard.writeText(jsonString);
+      setCopyCodeSuccess(true);
+      setTimeout(() => {
+        setCopyCodeSuccess(false);
+        setIsShareModalOpen(false);
+        setSelectedIds(new Set());
+      }, 1200);
+    } catch (err) {
+      console.error('Copy code failed', err);
+    }
+  };
+
   const handleBatchDelete = () => {
     const count = selectedIds.size;
-    if (window.confirm(`Are you sure you want to remove these ${count} selected items from your watchlist?`)) {
+    if (count === 0) return;
+    if (window.confirm(`Are you sure you want to remove these ${count} selected item(s) from your watchlist?`)) {
       if (onRemoveFromWatchlist) {
-        selectedIds.forEach((id) => {
-          onRemoveFromWatchlist(id);
+        const ids = Array.from(selectedIds);
+        ids.forEach((id) => {
+          try {
+            onRemoveFromWatchlist(id);
+          } catch (err) {
+            console.warn('Batch delete error for item:', id, err);
+          }
         });
       }
-      setSelectedIds(new Set()); // Clear selection after deletion
+      setSelectedIds(new Set());
+      setIsBatchModeActive(false);
     }
   };
 
@@ -288,13 +334,13 @@ export const WatchlistView: React.FC<WatchlistViewProps> = ({
         return new Date(timeB).getTime() - new Date(timeA).getTime();
       }
       if (filters.sortBy === 'rating_desc') {
-        const ratingA = stateA?.personalRating || a.tmdbRating;
-        const ratingB = stateB?.personalRating || b.tmdbRating;
+        const ratingA = stateA?.personalRating || (a.imdbRating || 0);
+        const ratingB = stateB?.personalRating || (b.imdbRating || 0);
         return ratingB - ratingA;
       }
       if (filters.sortBy === 'rating_asc') {
-        const ratingA = stateA?.personalRating || a.tmdbRating;
-        const ratingB = stateB?.personalRating || b.tmdbRating;
+        const ratingA = stateA?.personalRating || (a.imdbRating || 0);
+        const ratingB = stateB?.personalRating || (b.imdbRating || 0);
         return ratingA - ratingB;
       }
       if (filters.sortBy === 'year_desc') return b.year - a.year;
@@ -357,13 +403,22 @@ export const WatchlistView: React.FC<WatchlistViewProps> = ({
             )}
           </div>
 
-          {/* Batch Selection Action Buttons beside (before) random pick button */}
-          {selectedIds.size > 0 && (
-            <div className="flex items-center gap-2 animate-scale-up">
+          {/* Batch Selection Action Bar when active */}
+          {isSelectionModeActive && (
+            <div className="flex items-center gap-2 animate-scale-up flex-wrap">
+              {/* Select All / Deselect All Button */}
+              <button
+                onClick={handleToggleSelectAll}
+                className="flex items-center gap-1.5 px-3 py-2 rounded-full bg-[var(--chip-bg)] text-[var(--text-primary)] hover:bg-[var(--border-subtle)] border border-[var(--border-subtle)] text-xs font-bold transition active:scale-95 shadow-xs"
+              >
+                <span>{selectedIds.size === filteredItems.length && filteredItems.length > 0 ? 'Deselect All' : 'Select All'}</span>
+              </button>
+
               {/* Delete Button */}
               <button
                 onClick={handleBatchDelete}
-                className="flex items-center gap-1.5 px-4 py-2 rounded-full bg-[var(--chip-bg)] text-[var(--text-primary)] hover:bg-[var(--border-subtle)] border border-[var(--border-subtle)] text-xs font-bold transition active:scale-95 shadow-xs"
+                disabled={selectedIds.size === 0}
+                className="flex items-center gap-1.5 px-3.5 py-2 rounded-full bg-red-600/90 hover:bg-red-600 text-white disabled:opacity-40 text-xs font-bold transition active:scale-95 shadow-xs"
               >
                 <Trash2 className="w-3.5 h-3.5 stroke-[2.2]" />
                 <span>Delete ({selectedIds.size})</span>
@@ -372,25 +427,50 @@ export const WatchlistView: React.FC<WatchlistViewProps> = ({
               {/* Share Button */}
               <button
                 onClick={() => setIsShareModalOpen(true)}
-                className="flex items-center gap-1.5 px-4 py-2 rounded-full bg-[var(--accent-primary)] text-[var(--bg-primary)] hover:opacity-95 text-xs font-bold transition active:scale-95 shadow-xs"
+                disabled={selectedIds.size === 0}
+                className="flex items-center gap-1.5 px-3.5 py-2 rounded-full bg-[var(--accent-primary)] text-[var(--bg-primary)] hover:opacity-95 disabled:opacity-40 text-xs font-bold transition active:scale-95 shadow-xs"
               >
                 <Share2 className="w-3.5 h-3.5 stroke-[2.2]" />
                 <span>Share ({selectedIds.size})</span>
               </button>
 
-              {/* Clear Selection Button */}
+              {/* Cancel / Done Selection Button */}
               <button
-                onClick={() => setSelectedIds(new Set())}
+                onClick={() => {
+                  setSelectedIds(new Set());
+                  setIsBatchModeActive(false);
+                }}
                 className="p-2 rounded-full text-[var(--text-secondary)] hover:text-[var(--text-primary)] hover:bg-[var(--chip-bg)] transition active:scale-95"
-                title="Clear selection"
+                title="Exit batch selection"
               >
                 <X className="w-4 h-4" />
               </button>
 
               {/* Subtle divider */}
-              <div className="w-[1px] h-5 bg-[var(--border-subtle)] mx-1" />
+              <div className="w-[1px] h-5 bg-[var(--border-subtle)] mx-1 hidden sm:block" />
             </div>
           )}
+
+          {/* Toggle Batch Mode Button */}
+          <button
+            onClick={() => {
+              if (isSelectionModeActive) {
+                setIsBatchModeActive(false);
+                setSelectedIds(new Set());
+              } else {
+                setIsBatchModeActive(true);
+              }
+            }}
+            className={`flex items-center gap-1.5 px-3.5 py-2 rounded-full text-xs font-bold transition active:scale-95 shadow-xs border ${
+              isSelectionModeActive
+                ? 'bg-[var(--accent-primary)] text-[var(--bg-primary)] border-[var(--accent-primary)]'
+                : 'bg-[var(--chip-bg)] text-[var(--text-primary)] border-[var(--border-subtle)] hover:bg-[var(--border-subtle)]'
+            }`}
+            title="Toggle Batch Multi-Select Mode"
+          >
+            <CheckSquare className="w-3.5 h-3.5" />
+            <span>{isSelectionModeActive ? 'Done' : 'Batch Select'}</span>
+          </button>
 
           {/* Random Pick Button (In Secondary Theme Color) */}
           <button
@@ -454,7 +534,7 @@ export const WatchlistView: React.FC<WatchlistViewProps> = ({
           <div className="space-y-3">
             {filteredItems.map(item => {
               const state = userStates[item.id];
-              const rating = state?.personalRating || item.tmdbRating;
+              const rating = state?.personalRating || (item.imdbRating || 0);
               const progress = state?.progressPercent || 0;
               const year = item.releaseDate ? item.releaseDate.split('-')[0] : '';
 
@@ -462,7 +542,7 @@ export const WatchlistView: React.FC<WatchlistViewProps> = ({
                 <div
                   key={item.id}
                   onClick={(e) => {
-                    if (selectedIds.size > 0) {
+                    if (isSelectionModeActive) {
                       e.stopPropagation();
                       handleToggleItemSelection(item.id);
                     } else {
@@ -476,14 +556,14 @@ export const WatchlistView: React.FC<WatchlistViewProps> = ({
                   }`}
                 >
                   {/* Selection Circle in List View */}
-                  {selectedIds.size > 0 && (
+                  {isSelectionModeActive && (
                     <div className="mr-1 shrink-0">
                       {selectedIds.has(item.id) ? (
                         <div className="w-5 h-5 rounded-full bg-[var(--accent-primary)] text-[var(--bg-primary)] flex items-center justify-center border border-[var(--bg-primary)] shadow-xs animate-scale-up">
                           <Check className="w-3 h-3 stroke-[3.5]" />
                         </div>
                       ) : (
-                        <div className="w-5 h-5 rounded-full border border-[var(--text-secondary)]/40" />
+                        <div className="w-5 h-5 rounded-full border border-[var(--text-secondary)]/50 bg-[var(--chip-bg)]" />
                       )}
                     </div>
                   )}
@@ -564,7 +644,7 @@ export const WatchlistView: React.FC<WatchlistViewProps> = ({
                 item={item}
                 userState={userStates[item.id]}
                 onClick={() => {
-                  if (selectedIds.size > 0) {
+                  if (isSelectionModeActive) {
                     handleToggleItemSelection(item.id);
                   } else {
                     onSelectMedia(item);
@@ -577,8 +657,8 @@ export const WatchlistView: React.FC<WatchlistViewProps> = ({
                 onToggleWatchlist={onToggleWatchlist}
                 onToggleFavorite={onToggleFavorite}
                 isSelected={selectedIds.has(item.id)}
-                isSelectionModeActive={selectedIds.size > 0}
-                onLongPress={settings?.tweaks?.longPressBatchSelection ? () => handleLongPressItem(item.id) : undefined}
+                isSelectionModeActive={isSelectionModeActive}
+                onLongPress={() => handleLongPressItem(item.id)}
               />
             ))}
           </div>
@@ -683,6 +763,24 @@ export const WatchlistView: React.FC<WatchlistViewProps> = ({
                   </div>
                   <div className="text-[11px] text-[var(--text-secondary)] mt-0.5 leading-relaxed">
                     Open your device's native sharing menu to send the changes directly via email, chat, or other apps.
+                  </div>
+                </div>
+              </button>
+
+              {/* Option 3: Copy Code */}
+              <button
+                onClick={handleBatchCopyCode}
+                className="flex items-center gap-4 p-4 rounded-2xl bg-[var(--chip-bg)] hover:bg-[var(--border-subtle)] border border-[var(--border-subtle)] text-left transition duration-200 active:scale-[0.98] group"
+              >
+                <div className="w-10 h-10 rounded-xl bg-[var(--accent-primary)]/10 text-[var(--accent-primary)] flex items-center justify-center shrink-0">
+                  {copyCodeSuccess ? <Check className="w-5 h-5 text-emerald-500" /> : <Copy className="w-5 h-5" />}
+                </div>
+                <div className="min-w-0">
+                  <div className="text-sm font-bold text-[var(--text-primary)]">
+                    {copyCodeSuccess ? '✓ Copied to Clipboard!' : 'Copy Code (JSON Payload)'}
+                  </div>
+                  <div className="text-[11px] text-[var(--text-secondary)] mt-0.5 leading-relaxed">
+                    Copy the batch transfer JSON payload code to your clipboard. Easily paste into Device Transfer.
                   </div>
                 </div>
               </button>

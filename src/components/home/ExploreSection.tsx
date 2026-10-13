@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useMemo, useCallback } from 'react';
 import { MediaItem, PersonalMediaState, MediaType } from '../../types/movie';
 import { MoviePoster } from '../common/MoviePoster';
-import { fetchExploreRecommendations } from '../../services/tmdb';
+import { fetchExploreRecommendations } from '../../data/curatedCatalog';
 import { Compass, Sparkles, Filter, ChevronDown, RefreshCw, Film, Tv, Loader2, Star } from 'lucide-react';
 
 interface ExploreSectionProps {
@@ -14,7 +14,7 @@ interface ExploreSectionProps {
   onDismissFromWatching?: (id: string) => void;
   onToggleWatchlist?: (id: string) => void;
   onToggleFavorite?: (id: string) => void;
-  tmdbApiKey?: string;
+  omdbApiKey?: string;
   onAddMediaToLibrary?: (item: MediaItem) => void;
 }
 
@@ -28,7 +28,7 @@ export const ExploreSection: React.FC<ExploreSectionProps> = ({
   onDismissFromWatching,
   onToggleWatchlist,
   onToggleFavorite,
-  tmdbApiKey,
+  omdbApiKey,
   onAddMediaToLibrary,
 }) => {
   const [extraExploreItems, setExtraExploreItems] = useState<MediaItem[]>([]);
@@ -37,11 +37,11 @@ export const ExploreSection: React.FC<ExploreSectionProps> = ({
   const [genreFilter, setGenreFilter] = useState<string>('all');
   const [visibleCount, setVisibleCount] = useState<number>(18);
 
-  // Fetch live 50+ TMDB Explore Recommendations on mount
+  // Fetch live 50+ OMDb Explore Recommendations on mount
   const loadExploreData = useCallback(async () => {
     setIsLoading(true);
     try {
-      const items = await fetchExploreRecommendations(tmdbApiKey);
+      const items = await fetchExploreRecommendations(omdbApiKey);
       if (items.length > 0) {
         setExtraExploreItems(items);
       }
@@ -50,7 +50,7 @@ export const ExploreSection: React.FC<ExploreSectionProps> = ({
     } finally {
       setIsLoading(false);
     }
-  }, [tmdbApiKey]);
+  }, [omdbApiKey]);
 
   useEffect(() => {
     loadExploreData();
@@ -80,7 +80,7 @@ export const ExploreSection: React.FC<ExploreSectionProps> = ({
       // Filter by type or top rated or new releases
       if (typeFilter === 'movie' && item.type !== 'movie') return false;
       if (typeFilter === 'tv' && item.type !== 'tv') return false;
-      if (typeFilter === 'top_rated' && (item.tmdbRating || 0) < 7.5) return false;
+      if (typeFilter === 'top_rated' && (item.imdbRating || 0) < 7.5) return false;
       if (typeFilter === 'new_releases' && (item.year || 0) < 2025) return false;
 
       // Filter by genre
@@ -92,7 +92,7 @@ export const ExploreSection: React.FC<ExploreSectionProps> = ({
     }).sort((a, b) => {
       // Sort by newest release date first to ensure live updates of new releases are prioritized
       if (typeFilter === 'top_rated') {
-        return (b.tmdbRating || 0) - (a.tmdbRating || 0);
+        return (b.imdbRating || 0) - (a.imdbRating || 0);
       }
       
       const dateA = a.releaseDate ? new Date(a.releaseDate).getTime() : 0;
@@ -101,7 +101,7 @@ export const ExploreSection: React.FC<ExploreSectionProps> = ({
       if (dateB !== dateA) {
         return dateB - dateA;
       }
-      return (b.tmdbRating || 0) - (a.tmdbRating || 0);
+      return (b.imdbRating || 0) - (a.imdbRating || 0);
     });
   }, [allPool, userStates, typeFilter, genreFilter]);
 
@@ -133,7 +133,7 @@ export const ExploreSection: React.FC<ExploreSectionProps> = ({
             Explore Recommendations
           </h2>
           <p className="text-xs sm:text-sm text-[var(--text-secondary)] mt-1 font-medium">
-            {exploreRecommendations.length} trending and acclaimed titles from TMDB not yet in your watchlist
+            {exploreRecommendations.length} trending and acclaimed titles from OMDb not yet in your watchlist
           </p>
         </div>
 
@@ -201,7 +201,7 @@ export const ExploreSection: React.FC<ExploreSectionProps> = ({
           <button
             onClick={loadExploreData}
             disabled={isLoading}
-            title="Refresh TMDB recommendations"
+            title="Refresh OMDb recommendations"
             className="p-2 rounded-full bg-[var(--bg-card-yellow)] hover:opacity-90 text-[var(--text-card-yellow)] transition active:scale-95 disabled:opacity-50 border border-[var(--border-subtle)]"
           >
             <RefreshCw className={`w-3.5 h-3.5 ${isLoading ? 'animate-spin' : ''}`} />
@@ -243,7 +243,7 @@ export const ExploreSection: React.FC<ExploreSectionProps> = ({
         <div className="py-16 text-center text-[#4E562F] flex flex-col items-center gap-3">
           <Loader2 className="w-8 h-8 animate-spin" />
           <p className="text-xs font-bold tracking-wider uppercase">
-            Fetching 50+ recommendations from TMDB...
+            Fetching 50+ recommendations from OMDb...
           </p>
         </div>
       )}

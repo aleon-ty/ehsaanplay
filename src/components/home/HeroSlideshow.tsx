@@ -98,7 +98,7 @@ export const HeroSlideshow: React.FC<HeroSlideshowProps> = ({
   const currentItem = featuredItems[currentIndex];
   const currentState = userStates[currentItem.id];
   const inWatchlist = !!currentState?.inWatchlist;
-  const rating = currentState?.personalRating || currentItem.tmdbRating || 8.4;
+  const rating = currentState?.personalRating || currentItem.imdbRating || 8.4;
 
   const goToPrev = () => {
     setCurrentIndex(prev => (prev === 0 ? featuredItems.length - 1 : prev - 1));

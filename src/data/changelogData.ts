@@ -13,8 +13,118 @@ export interface ChangelogVersion {
 
 export const CHANGELOG_VERSIONS: ChangelogVersion[] = [
   {
-    version: 'v2.2.9',
+    version: 'v2.3.0',
     isLatest: true,
+    tagline: 'IMDb Movie & TV Series Link Preview, Search Provider Switcher, Clean OMDb Relevance & Precision Noise Filter',
+    points: [
+      {
+        title: 'Small Dark Provider Switcher Button',
+        description: 'Added a compact, sleek dark button positioned directly beside the Esc / close button in the Search window, empowering users to switch active API service providers (Auto, OMDb, OMDb) with a single tap.',
+      },
+      {
+        title: 'Visual Provider State Indicator',
+        description: 'Equipped the provider switcher button with an instant color-coded visual indicator dot (emerald for Auto, blue for OMDb, amber for OMDb) displaying the current search provider status.',
+      },
+      {
+        title: 'Interactive OMDb Diagnostics Routine',
+        description: 'Integrated on-demand OMDb diagnostics to test live connectivity, validate API authentication keys, inspect endpoint responses, and display latency metrics.',
+      },
+      {
+        title: 'Search Letter Matching & Noise Elimination',
+        description: 'Eliminated unrelated foreign translations and noise from OMDb search results by requiring that titles or original titles strictly contain the searched letters or query terms (e.g. purifying "Suzume" search by removing "Jong-Toh").',
+      },
+      {
+        title: 'Exact & Prefix Title Match Prioritization',
+        description: 'Built a relevance scoring algorithm in OMDb search giving +1000 points to exact title matches and +500 points to prefix matches, guaranteeing flagship releases rank first.',
+      },
+      {
+        title: 'Logarithmic Popularity & Consensus Weighting',
+        description: 'Augmented title rankings with logarithmic vote count and popularity weightings so globally verified releases rise above obscure recordings.',
+      },
+      {
+        title: 'Zero-Vote & Missing Poster Filtering',
+        description: 'Filtered out unverified zero-vote entries that lack poster artwork unless they represent an exact title match, keeping search results visual and relevant.',
+      },
+      {
+        title: 'Universal IMDb Link & Title ID Extraction',
+        description: 'Created a dedicated parser (imdbParser.ts) supporting desktop URLs (imdb.com/title/tt...), mobile URLs (m.imdb.com/title/...), bare domain links, and direct title IDs (tt0133093).',
+      },
+      {
+        title: 'IMDb URL Normalization & Sanitization',
+        description: 'Sanitizes pasted IMDb links by trimming trailing slashes, stripping query tracking parameters, and pruning subpaths like /episodes or /reviews to extract canonical title IDs.',
+      },
+      {
+        title: 'Strict Input Validation & Friendly Error Feedback',
+        description: 'Added client-side input validation displaying clear, contextual feedback for unsupported URLs, non-title IMDb pages (such as actors or lists), and malformed inputs.',
+      },
+      {
+        title: 'Dedicated IMDb Link Preview Modal',
+        description: 'Engineered a dedicated responsive modal (ImdbPreviewModal.tsx) styled in EHSAAN PLAY\'s warm coffee aesthetic featuring rich espresso brown, cream, caramel, and beige tones.',
+      },
+      {
+        title: 'Instant Clipboard Paste Action',
+        description: 'Added a convenient "Paste" button inside the IMDb link input bar to automatically read and parse URLs directly from the system clipboard.',
+      },
+      {
+        title: 'Animated Shimmer Skeleton & Reveal',
+        description: 'Integrated custom shimmering loading skeletons that match the preview card structure while fetching metadata from the OMDb API, followed by a smooth reveal animation.',
+      },
+      {
+        title: 'Comprehensive Media Information Card',
+        description: 'Renders an informative media card displaying official title, content type badge (Movie, TV Series, Episode), release year, formatted air date, genres, runtime, and full plot summary.',
+      },
+      {
+        title: 'Parental & Age Rating Badges',
+        description: 'Presents official content certification badges (PG-13, TV-MA, R, etc.) formatted with high-contrast pill styling.',
+      },
+      {
+        title: 'TV Series Season & Episode Count Badges',
+        description: 'Provides television series metadata badges showing total season count and total episodes for episodic content.',
+      },
+      {
+        title: 'Verified Production Credits & Main Cast',
+        description: 'Displays verified directors, writers, and ensemble cast members with clean typography without fabricating missing details.',
+      },
+      {
+        title: 'Consolidated Critic & Community Ratings Bar',
+        description: 'Displays a ratings bar with IMDb star score and total vote count, Rotten Tomatoes Tomatometer percentage, and Metacritic rating badge.',
+      },
+      {
+        title: 'Poster Fallback & SafeImage Handling',
+        description: 'Employs SafeImage with custom film reel placeholders and graceful image failure recovery when official poster artwork is missing.',
+      },
+      {
+        title: 'One-Click Copy IMDb ID Action',
+        description: 'Included a copy button on the preview card to easily copy the canonical IMDb title ID (tt...) to the clipboard with visual confirmation feedback.',
+      },
+      {
+        title: 'Secure "View on IMDb" External Navigation',
+        description: 'Added an external link button to view the official title page on IMDb in a new browser tab with strict rel="noopener noreferrer" safety attributes.',
+      },
+      {
+        title: 'Direct "Add to Library" & "Add to Watchlist"',
+        description: 'Empowered users to save discovered IMDb movies or TV shows straight to their personal library or custom watchlist directly from the preview card.',
+      },
+      {
+        title: 'Header Quick-Access IMDb Action',
+        description: 'Integrated an IMDb Link Preview launcher icon in the main app header (Zone 3, next to Search and Quick Random Pick) for immediate access from anywhere.',
+      },
+      {
+        title: 'Search Modal Automatic IMDb Link Detection Banner',
+        description: 'Configured the Search Modal to automatically detect pasted IMDb URLs or tt... title IDs and show a prompt banner to open the dedicated IMDb Link Preview.',
+      },
+      {
+        title: 'Movie Preview Modal IMDb Integration',
+        description: 'Added an IMDb preview inspection button in the Movie Preview Modal\'s overview and production details section to preview full IMDb metadata for existing catalog items.',
+      },
+      {
+        title: 'Secure OMDb API Key Integration & Resilient Error Handling',
+        description: 'Configured secure API key retrieval via VITE_OMDB_API_KEY with resilient handling for invalid credentials, rate limit errors, missing records, and network drops.',
+      },
+    ],
+  },
+  {
+    version: 'v2.2.9',
     tagline: 'Fullscreen Preview Changes Window, Detailed Mutation Inspection & Explicit Approve Action',
     points: [
       {
@@ -44,6 +154,11 @@ export const CHANGELOG_VERSIONS: ChangelogVersion[] = [
       {
         title: 'Clean Dismiss Controls',
         description: 'Built elegant dismiss controls to cancel, close, or discard change previews at any time.',
+      },
+      {
+        title: 'Personal Favourites Expand & Rail Navigation',
+        description:
+          'Displays latest added items in the Personal Favourites section first, and dynamically transforms the right scroll arrow into a deep blood red Expand button when reaching the end of the rail to open the Watchlist page with the favourites filter pre-applied. (thmeo07)',
       },
     ],
   },
@@ -341,7 +456,7 @@ export const CHANGELOG_VERSIONS: ChangelogVersion[] = [
       },
       {
         title: 'Zero-Artwork Compact Transfer Payloads',
-        description: 'Excluded heavy image binary data and large artwork from transfer packets, streaming via compact TMDB relative paths so payloads remain microscopic in size.',
+        description: 'Excluded heavy image binary data and large artwork from transfer packets, streaming via compact OMDb relative paths so payloads remain microscopic in size.',
       },
       {
         title: 'Defensive Non-Destructive Merge Engine',
@@ -375,7 +490,7 @@ export const CHANGELOG_VERSIONS: ChangelogVersion[] = [
       },
       {
         title: 'Original-Resolution Backdrop Stream',
-        description: 'Upgraded background artwork loading in the hero slideshow to retrieve original full-bleed TMDB resolutions, preventing pixelation or blurring on 4K/retina monitors.',
+        description: 'Upgraded background artwork loading in the hero slideshow to retrieve original full-bleed OMDb resolutions, preventing pixelation or blurring on 4K/retina monitors.',
       },
       {
         title: 'Transparent Image Canvas Fallback',
@@ -863,7 +978,7 @@ export const CHANGELOG_VERSIONS: ChangelogVersion[] = [
     points: [
       {
         title: 'Material 3 Modular Settings Hub',
-        description: 'Grouped all preferences behind dedicated topic cards (App Specs, Storage & Offline, Appearance, Tweaks, TMDB, Shortcuts, Backup, About).',
+        description: 'Grouped all preferences behind dedicated topic cards (App Specs, Storage & Offline, Appearance, Tweaks, OMDb, Shortcuts, Backup, About).',
       },
       {
         title: 'Dedicated Mobile Topic Sub-Pages',
@@ -1009,7 +1124,7 @@ export const CHANGELOG_VERSIONS: ChangelogVersion[] = [
       },
       {
         title: 'Added & Improved Explore Section',
-        description: 'Enhanced dynamic TMDB discovery recommendations on the Home page with zero-network fallback safety.',
+        description: 'Enhanced dynamic OMDb discovery recommendations on the Home page with zero-network fallback safety.',
       },
       {
         title: 'New Warm Yellow UI Accents',
@@ -1084,7 +1199,7 @@ export const CHANGELOG_VERSIONS: ChangelogVersion[] = [
         description: 'Integrated complete library artwork pre-fetching to ensure zero missing posters during full offline usage.',
       },
       {
-        title: 'Custom TMDB API Health Diagnostics',
+        title: 'Custom OMDb API Health Diagnostics',
         description: 'Built-in real-time connection diagnostic tester measuring latency and endpoint reachability.',
       },
       {
@@ -1106,7 +1221,7 @@ export const CHANGELOG_VERSIONS: ChangelogVersion[] = [
         description: 'Engineered complete offline-capable progressive web application with IndexedDB and Cache Storage.',
       },
       {
-        title: 'Full TMDB Catalog Integration',
+        title: 'Full OMDb Catalog Integration',
         description: 'Live catalog searching, trending movies, TV series, recommendations, and custom collections.',
       },
       {

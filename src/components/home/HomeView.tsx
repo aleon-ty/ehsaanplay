@@ -1,5 +1,13 @@
 import React, { useMemo } from 'react';
-import { MediaItem, PersonalMediaState, ActiveTab, HomeSectionsConfig } from '../../types/movie';
+import {
+  MediaItem,
+  PersonalMediaState,
+  ActiveTab,
+  HomeSectionsConfig,
+  AppTweaksConfig,
+  UserSettings,
+  DEFAULT_APP_TWEAKS,
+} from '../../types/movie';
 import { HeroSlideshow } from './HeroSlideshow';
 import { LibraryStats } from './LibraryStats';
 import { RankingRail } from './RankingRail';
@@ -30,9 +38,11 @@ interface HomeViewProps {
   onMarkWatched?: (id: string) => void;
   onToggleWatchlist?: (id: string) => void;
   onToggleFavorite?: (id: string) => void;
-  tmdbApiKey?: string;
   onAddMediaToLibrary?: (item: MediaItem) => void;
   onOpenChangelog?: () => void;
+  onOpenLicense?: () => void;
+  tweaks?: AppTweaksConfig;
+  onUpdateSettings?: (partial: Partial<UserSettings>) => void;
 }
 
 export const HomeView: React.FC<HomeViewProps> = ({
@@ -50,9 +60,11 @@ export const HomeView: React.FC<HomeViewProps> = ({
   onMarkWatched,
   onToggleWatchlist,
   onToggleFavorite,
-  tmdbApiKey,
   onAddMediaToLibrary,
   onOpenChangelog,
+  onOpenLicense,
+  tweaks,
+  onUpdateSettings,
 }) => {
   const sections = homeSections || {
     showTopMovies: true,
@@ -63,13 +75,13 @@ export const HomeView: React.FC<HomeViewProps> = ({
     showExplore: true,
   };
 
-  // Top 10 Movies sorted by TMDB / user rating
+  // Top 10 Movies sorted by OMDb / user rating
   const top10Movies = useMemo(() => {
     return mediaItems
       .filter(m => m.type === 'movie')
       .sort((a, b) => {
-        const ratingA = userStates[a.id]?.personalRating || a.tmdbRating;
-        const ratingB = userStates[b.id]?.personalRating || b.tmdbRating;
+        const ratingA = userStates[a.id]?.personalRating || (a.imdbRating || 0);
+        const ratingB = userStates[b.id]?.personalRating || (b.imdbRating || 0);
         return ratingB - ratingA;
       })
       .slice(0, 10);
@@ -80,8 +92,8 @@ export const HomeView: React.FC<HomeViewProps> = ({
     return mediaItems
       .filter(m => m.type === 'tv')
       .sort((a, b) => {
-        const ratingA = userStates[a.id]?.personalRating || a.tmdbRating;
-        const ratingB = userStates[b.id]?.personalRating || b.tmdbRating;
+        const ratingA = userStates[a.id]?.personalRating || (a.imdbRating || 0);
+        const ratingB = userStates[b.id]?.personalRating || (b.imdbRating || 0);
         return ratingB - ratingA;
       })
       .slice(0, 10);
@@ -121,11 +133,15 @@ export const HomeView: React.FC<HomeViewProps> = ({
       .slice(0, 10);
   }, [mediaItems, userStates]);
 
-  // Favorites / Personal Picks
+  // Favorites / Personal Picks (Sorted by latest added/favorited first)
   const favoriteItems = useMemo(() => {
     return mediaItems
       .filter(m => userStates[m.id]?.isFavorite)
-      .slice(0, 10);
+      .sort((a, b) => {
+        const timeA = userStates[a.id]?.favoritedAt || userStates[a.id]?.addedAt || '';
+        const timeB = userStates[b.id]?.favoritedAt || userStates[b.id]?.addedAt || '';
+        return timeB.localeCompare(timeA);
+      });
   }, [mediaItems, userStates]);
 
   // Featured 5 recently added or highlighted titles for top Hero Slideshow
@@ -188,7 +204,7 @@ export const HomeView: React.FC<HomeViewProps> = ({
       {sections.showTopSeries && (
         <RankingRail
           title="Top 10 Series"
-          subtitle="Acclaimed television narratives and limited series"
+          subtitle="Top rated television series in your collection"
           items={top10Series}
           userStates={userStates}
           onSelectMedia={onSelectMedia}
@@ -202,11 +218,11 @@ export const HomeView: React.FC<HomeViewProps> = ({
         />
       )}
 
-      {/* Personal Favorites Rail */}
+      {/* Personal Favorites Rail / Grid */}
       {sections.showFavorites && favoriteItems.length > 0 && (
         <RankingRail
           title="Personal Favorites"
-          subtitle="Titles marked with highest sentiment in your journal"
+          subtitle="Your top favorited movies and series"
           items={favoriteItems}
           userStates={userStates}
           onSelectMedia={onSelectMedia}
@@ -217,6 +233,9 @@ export const HomeView: React.FC<HomeViewProps> = ({
           onDismissFromWatching={onDismissFromWatching}
           onToggleWatchlist={onToggleWatchlist}
           onToggleFavorite={onToggleFavorite}
+          onExpand={() => onNavigateToWatchlistWithFilter('favorites')}
+          expandTooltip="View All in Favorites Watchlist"
+          layout={tweaks?.favoritesLayout || 'horizontal'}
         />
       )}
 
@@ -224,7 +243,7 @@ export const HomeView: React.FC<HomeViewProps> = ({
       {sections.showRecentlyWatched && recentlyWatchedItems.length > 0 && (
         <RankingRail
           title="Recently Watched"
-          subtitle="Your most recently completed journeys"
+          subtitle="Your most recently completed movies and series"
           items={recentlyWatchedItems}
           userStates={userStates}
           onSelectMedia={onSelectMedia}
@@ -238,7 +257,7 @@ export const HomeView: React.FC<HomeViewProps> = ({
         />
       )}
 
-      {/* Explore Recommendations Section (50+ Titles from TMDB excluding Watchlist) */}
+      {/* Explore Recommendations Section (50+ Titles from OMDb excluding Watchlist) */}
       {sections.showExplore !== false && (
         <ExploreSection
           mediaItems={mediaItems}
@@ -250,13 +269,28 @@ export const HomeView: React.FC<HomeViewProps> = ({
           onDismissFromWatching={onDismissFromWatching}
           onToggleWatchlist={onToggleWatchlist}
           onToggleFavorite={onToggleFavorite}
-          tmdbApiKey={tmdbApiKey}
           onAddMediaToLibrary={onAddMediaToLibrary}
         />
       )}
 
-      {/* Minimal Themed Footer */}
-      <Footer onOpenChangelog={onOpenChangelog} />
+      {/* Minimal Themed Footer Showcase (with red cross button to remove) */}
+      {tweaks?.showFooterShowcase !== false && (
+        <Footer
+          onOpenChangelog={onOpenChangelog}
+          onOpenLicense={onOpenLicense}
+          onDismiss={() => {
+            if (onUpdateSettings) {
+              onUpdateSettings({
+                tweaks: {
+                  ...DEFAULT_APP_TWEAKS,
+                  ...tweaks,
+                  showFooterShowcase: false,
+                },
+              });
+            }
+          }}
+        />
+      )}
     </div>
   );
 };

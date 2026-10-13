@@ -27,13 +27,114 @@ import {
   getTVShowInitialMetadata,
   getCuratedExploreMediaItems,
   KNOWN_TV_SHOWS_METADATA,
-} from '../services/tmdb';
+} from '../data/curatedCatalog';
+import { fetchDetailsWithFallback } from '../services/metadataFallback';
 import {
   recordLibraryChange,
   applyRecentChanges,
   RecentChangesPackage,
 } from '../services/recentChanges';
 import { clearImageCache } from '../services/imageStorage';
+
+export function getCanonicalKeyForItem(item: MediaItem): string {
+  if (item.imdbId && item.imdbId.startsWith('tt')) {
+    return item.imdbId;
+  }
+  if (item.tmdbId) {
+    return `tmdb-${item.type || 'movie'}-${item.tmdbId}`;
+  }
+  if (item.id && (item.id.startsWith('tt') || item.id.startsWith('tmdb-'))) {
+    return item.id;
+  }
+  const cleanTitle = (item.title || '').toLowerCase().trim().replace(/[^a-z0-9]/g, '');
+  if (cleanTitle && item.year) {
+    return `${item.type || 'movie'}-${cleanTitle}-${item.year}`;
+  }
+  return item.id || `unknown-${Math.random()}`;
+}
+
+export function deduplicateMediaItemsAndStates(
+  rawMedia: MediaItem[],
+  rawStates: Record<string, PersonalMediaState>,
+  rawLists: CustomList[] = []
+): { cleanMedia: MediaItem[]; cleanStates: Record<string, PersonalMediaState>; cleanLists: CustomList[] } {
+  const canonicalMap = new Map<string, MediaItem>();
+  const idToCanonical = new Map<string, string>();
+
+  // 1. Group and merge media items into canonical entries
+  for (const item of rawMedia) {
+    if (!item) continue;
+    const canonicalKey = getCanonicalKeyForItem(item);
+    idToCanonical.set(item.id, canonicalKey);
+    if (item.imdbId) idToCanonical.set(item.imdbId, canonicalKey);
+    if (item.tmdbId) idToCanonical.set(`tmdb-${item.type || 'movie'}-${item.tmdbId}`, canonicalKey);
+    const titleKey = `${item.type || 'movie'}-${(item.title || '').toLowerCase().trim().replace(/[^a-z0-9]/g, '')}-${item.year}`;
+    idToCanonical.set(titleKey, canonicalKey);
+
+    const existing = canonicalMap.get(canonicalKey);
+    if (!existing) {
+      canonicalMap.set(canonicalKey, { ...item, id: canonicalKey });
+    } else {
+      // Merge rich properties from duplicate item
+      const merged: MediaItem = {
+        ...existing,
+        id: canonicalKey,
+        imdbId: existing.imdbId || item.imdbId,
+        tmdbId: existing.tmdbId || item.tmdbId,
+        posterUrl: existing.posterUrl || item.posterUrl,
+        fallbackPosterUrl: existing.fallbackPosterUrl || item.fallbackPosterUrl,
+        backdropUrl: existing.backdropUrl || item.backdropUrl,
+        overview: existing.overview && existing.overview.length > 20 ? existing.overview : (item.overview || existing.overview),
+        genres: Array.from(new Set([...(existing.genres || []), ...(item.genres || [])])),
+        cast: existing.cast && existing.cast.length > 0 ? existing.cast : (item.cast || []),
+        crew: existing.crew && existing.crew.length > 0 ? existing.crew : (item.crew || []),
+        providers: existing.providers && existing.providers.length > 0 ? existing.providers : (item.providers || []),
+        seasonsCount: Math.max(existing.seasonsCount || 0, item.seasonsCount || 0) || undefined,
+        episodesCount: Math.max(existing.episodesCount || 0, item.episodesCount || 0) || undefined,
+        seasons: existing.seasons && existing.seasons.length > 0 ? existing.seasons : item.seasons,
+      };
+      canonicalMap.set(canonicalKey, merged);
+    }
+  }
+
+  const cleanMedia = Array.from(canonicalMap.values());
+
+  // 2. Consolidate PersonalMediaStates for all duplicate alias keys
+  const cleanStates: Record<string, PersonalMediaState> = {};
+  for (const [id, st] of Object.entries(rawStates)) {
+    if (!st) continue;
+    const itemInMedia = rawMedia.find(m => m.id === id);
+    const canonicalKey = idToCanonical.get(id) || (itemInMedia ? getCanonicalKeyForItem(itemInMedia) : id);
+
+    const prevSt = cleanStates[canonicalKey];
+    if (!prevSt) {
+      cleanStates[canonicalKey] = { ...st, mediaId: canonicalKey };
+    } else {
+      cleanStates[canonicalKey] = {
+        mediaId: canonicalKey,
+        inWatchlist: prevSt.inWatchlist || st.inWatchlist,
+        isWatched: prevSt.isWatched || st.isWatched,
+        isFavorite: prevSt.isFavorite || st.isFavorite,
+        progressPercent: Math.max(prevSt.progressPercent || 0, st.progressPercent || 0),
+        personalRating: prevSt.personalRating || st.personalRating,
+        notes: [prevSt.notes, st.notes].filter(Boolean).join('\n') || undefined,
+        addedAt: prevSt.addedAt || st.addedAt,
+        favoritedAt: prevSt.favoritedAt || st.favoritedAt,
+        lastWatchedAt: prevSt.lastWatchedAt || st.lastWatchedAt,
+        tvProgress: prevSt.tvProgress || st.tvProgress,
+      };
+    }
+  }
+
+  // 3. Remap item IDs in Custom Lists
+  const cleanLists = rawLists.map(list => {
+    const remappedIds = list.itemIds.map(id => idToCanonical.get(id) || id);
+    const uniqueIds = Array.from(new Set(remappedIds));
+    return { ...list, itemIds: uniqueIds };
+  });
+
+  return { cleanMedia, cleanStates, cleanLists };
+}
 
 export function useMediaLibrary() {
   const [mediaItems, setMediaItems] = useState<MediaItem[]>([]);
@@ -81,9 +182,9 @@ export function useMediaLibrary() {
       if (!currentMedia || currentMedia.length < 40 || hasLegacyMockItems) {
         try {
           const [netflixMovies, netflixSeries, exploreItems] = await Promise.all([
-            fetchNetflixTop10Movies(loadedSettings.tmdbApiKey),
-            fetchNetflixTop10Series(loadedSettings.tmdbApiKey),
-            fetchExploreRecommendations(loadedSettings.tmdbApiKey),
+            fetchNetflixTop10Movies(loadedSettings.omdbApiKey),
+            fetchNetflixTop10Series(loadedSettings.omdbApiKey),
+            fetchExploreRecommendations(loadedSettings.omdbApiKey),
           ]);
           
           const combined = [...netflixMovies, ...netflixSeries, ...exploreItems];
@@ -113,8 +214,8 @@ export function useMediaLibrary() {
 
       // Auto-repair any TV series with outdated seasons metadata (e.g. Breaking Bad with 1 season)
       const repairedMedia = (currentMedia || []).map(item => {
-        if (item.type === 'tv' && item.tmdbId) {
-          const meta = getTVShowInitialMetadata(item.tmdbId);
+        if (item.type === 'tv' && item.id) {
+          const meta = getTVShowInitialMetadata(item.id);
           if (meta && (!item.seasonsCount || item.seasonsCount < meta.seasonsCount || !item.seasons)) {
             return {
               ...item,
@@ -141,8 +242,13 @@ export function useMediaLibrary() {
       }
 
       const finalMedia = repairedMedia;
-      saveMediaCache(finalMedia);
-      setMediaItems(finalMedia);
+      const { cleanMedia, cleanStates: dedupedStates, cleanLists } = deduplicateMediaItemsAndStates(finalMedia, cleanStates, loadedLists);
+      saveMediaCache(cleanMedia);
+      saveUserStates(dedupedStates);
+      saveCustomLists(cleanLists);
+      setMediaItems(cleanMedia);
+      setUserStates(dedupedStates);
+      setCustomLists(cleanLists);
       setIsInitialized(true);
     };
 
@@ -151,9 +257,13 @@ export function useMediaLibrary() {
 
   // Force refresh in-memory state from storage (used after delta merge)
   const refreshLibrary = useCallback(() => {
-    setMediaItems(loadMediaCache());
-    setUserStates(loadUserStates());
-    setCustomLists(loadCustomLists());
+    const rawMedia = loadMediaCache();
+    const rawStates = loadUserStates();
+    const rawLists = loadCustomLists();
+    const { cleanMedia, cleanStates: dedupedStates, cleanLists } = deduplicateMediaItemsAndStates(rawMedia, rawStates, rawLists);
+    setMediaItems(cleanMedia);
+    setUserStates(dedupedStates);
+    setCustomLists(cleanLists);
   }, []);
 
   // Update theme, color scheme & font on settings change
@@ -190,13 +300,11 @@ export function useMediaLibrary() {
     []
   );
 
-  // Hydrate item with full TMDB details (cast, crew, providers, trailer, seasons/episodes)
+  // Hydrate item with rich details using OMDb with automatic OMDb fallback
   const hydrateMediaDetails = useCallback(async (item: MediaItem) => {
-    if (!item.tmdbId) return item;
-
     try {
-      const details = await fetchMediaDetails(item.tmdbId, item.type, settings.tmdbApiKey);
-      const meta = item.type === 'tv' ? getTVShowInitialMetadata(item.tmdbId) : undefined;
+      const { details } = await fetchDetailsWithFallback(item, settings.tmdbApiKey, settings.omdbApiKey);
+      const meta = item.type === 'tv' && item.id ? getTVShowInitialMetadata(item.id) : undefined;
       const seasonsCount = item.type === 'tv'
         ? (details.seasonsCount || meta?.seasonsCount || item.seasonsCount || 1)
         : undefined;
@@ -230,7 +338,7 @@ export function useMediaLibrary() {
 
       return enriched;
     } catch {
-      const meta = item.type === 'tv' ? getTVShowInitialMetadata(item.tmdbId) : undefined;
+      const meta = item.type === 'tv' && item.id ? getTVShowInitialMetadata(item.id) : undefined;
       if (meta && item.type === 'tv') {
         const enriched: MediaItem = {
           ...item,
@@ -242,7 +350,7 @@ export function useMediaLibrary() {
       }
       return item;
     }
-  }, [settings.tmdbApiKey]);
+  }, [settings.omdbApiKey, settings.omdbApiKey]);
 
   // Toggle Watchlist
   const toggleWatchlist = useCallback((mediaId: string, optionalItem?: MediaItem) => {
@@ -280,24 +388,37 @@ export function useMediaLibrary() {
 
   // Quick action: Remove from Watchlist
   const removeFromWatchlist = useCallback((mediaId: string) => {
+    const target = mediaItems.find(m => m.id === mediaId);
+    const targetImdbId = target?.imdbId;
+    const targetTmdbId = target?.tmdbId;
+    const targetTitleKey = target ? `${target.type || 'movie'}-${(target.title || '').toLowerCase().trim().replace(/[^a-z0-9]/g, '')}-${target.year}` : null;
+
     setUserStates(prev => {
-      const current = getOrCreateState(mediaId, prev);
-      const updated = {
-        ...prev,
-        [mediaId]: {
-          ...current,
-          inWatchlist: false,
-        },
-      };
+      const updated = { ...prev };
+      for (const key of Object.keys(updated)) {
+        const item = mediaItems.find(m => m.id === key);
+        const matchesId = key === mediaId;
+        const matchesImdb = !!(targetImdbId && item?.imdbId === targetImdbId);
+        const matchesTmdb = !!(targetTmdbId && item?.tmdbId === targetTmdbId);
+        const matchesTitle = !!(targetTitleKey && item && `${item.type || 'movie'}-${(item.title || '').toLowerCase().trim().replace(/[^a-z0-9]/g, '')}-${item.year}` === targetTitleKey);
+
+        if (matchesId || matchesImdb || matchesTmdb || matchesTitle) {
+          updated[key] = {
+            ...updated[key],
+            inWatchlist: false,
+            isWatched: false,
+            progressPercent: 0,
+          };
+        }
+      }
       saveUserStates(updated);
-      const mediaItem = mediaItems.find(m => m.id === mediaId);
       recordLibraryChange('update_state', mediaId, {
-        state: { inWatchlist: false },
-        mediaItem,
+        state: { inWatchlist: false, isWatched: false, progressPercent: 0 },
+        mediaItem: target,
       });
       return updated;
     });
-  }, [getOrCreateState, mediaItems]);
+  }, [mediaItems]);
 
   // Quick action: Dismiss from Continue Watching
   const dismissFromWatching = useCallback((mediaId: string) => {
@@ -411,7 +532,7 @@ export function useMediaLibrary() {
         nextProgressPercent = 100;
 
         if (mediaItem && mediaItem.type === 'tv') {
-          const knownMeta = mediaItem.tmdbId ? KNOWN_TV_SHOWS_METADATA[mediaItem.tmdbId] : undefined;
+          const knownMeta = mediaItem.id ? KNOWN_TV_SHOWS_METADATA[mediaItem.id] : undefined;
           const seasons = Math.max(mediaItem.seasonsCount || 0, knownMeta?.seasonsCount || 0, 1);
           const totalEp = Math.max(
             mediaItem.episodesCount || 0,
@@ -439,7 +560,7 @@ export function useMediaLibrary() {
         nextProgressPercent = 100;
 
         if (mediaItem && mediaItem.type === 'tv') {
-          const knownMeta = mediaItem.tmdbId ? KNOWN_TV_SHOWS_METADATA[mediaItem.tmdbId] : undefined;
+          const knownMeta = mediaItem.id ? KNOWN_TV_SHOWS_METADATA[mediaItem.id] : undefined;
           const seasons = Math.max(mediaItem.seasonsCount || 0, knownMeta?.seasonsCount || 0, 1);
           const totalEp = Math.max(
             mediaItem.episodesCount || 0,
@@ -516,6 +637,7 @@ export function useMediaLibrary() {
         [mediaId]: {
           ...current,
           isFavorite: nextFavorite,
+          favoritedAt: nextFavorite ? new Date().toISOString() : undefined,
         },
       };
       saveUserStates(updated);
@@ -570,7 +692,7 @@ export function useMediaLibrary() {
       let nextTvProgress = current.tvProgress;
 
       if (mediaItem && mediaItem.type === 'tv') {
-        const knownMeta = mediaItem.tmdbId ? KNOWN_TV_SHOWS_METADATA[mediaItem.tmdbId] : undefined;
+        const knownMeta = mediaItem.id ? KNOWN_TV_SHOWS_METADATA[mediaItem.id] : undefined;
         const seasons = Math.max(mediaItem.seasonsCount || 0, knownMeta?.seasonsCount || 0, 1);
         const seasonsList = mediaItem.seasons || knownMeta?.seasons;
         const totalEp = seasonsList && seasonsList.length > 0
@@ -659,7 +781,7 @@ export function useMediaLibrary() {
         };
 
         const mediaItem = optionalItem || mediaItems.find(m => m.id === mediaId);
-        const knownMeta = mediaItem?.tmdbId ? KNOWN_TV_SHOWS_METADATA[mediaItem.tmdbId] : undefined;
+        const knownMeta = mediaItem?.id ? KNOWN_TV_SHOWS_METADATA[mediaItem.id] : undefined;
         const seasonsList = mediaItem?.seasons || knownMeta?.seasons;
         const totalSeasons = Math.max(mediaItem?.seasonsCount || 0, knownMeta?.seasonsCount || 0, seasonsList?.length || 0, 1);
         const totalEpisodes = seasonsList && seasonsList.length > 0
@@ -731,7 +853,7 @@ export function useMediaLibrary() {
       setUserStates(prev => {
         const current = getOrCreateState(mediaId, prev);
         const mediaItem = optionalItem || mediaItems.find(m => m.id === mediaId);
-        const knownMeta = mediaItem?.tmdbId ? KNOWN_TV_SHOWS_METADATA[mediaItem.tmdbId] : undefined;
+        const knownMeta = mediaItem?.id ? KNOWN_TV_SHOWS_METADATA[mediaItem.id] : undefined;
         const seasonsList = mediaItem?.seasons || knownMeta?.seasons;
         const totalSeasons = Math.max(mediaItem?.seasonsCount || 0, knownMeta?.seasonsCount || 0, seasonsList?.length || 0, 1);
         const totalEpisodes = seasonsList && seasonsList.length > 0
@@ -918,14 +1040,32 @@ export function useMediaLibrary() {
 
   // Delete media entity from library
   const deleteMediaItem = useCallback((mediaId: string) => {
+    const target = mediaItems.find(m => m.id === mediaId);
+    const targetImdbId = target?.imdbId;
+    const targetTmdbId = target?.tmdbId;
+    const targetTitleKey = target ? `${target.type || 'movie'}-${(target.title || '').toLowerCase().trim().replace(/[^a-z0-9]/g, '')}-${target.year}` : null;
+
+    const isMatch = (m: MediaItem) => {
+      if (m.id === mediaId) return true;
+      if (targetImdbId && m.imdbId === targetImdbId) return true;
+      if (targetTmdbId && m.tmdbId === targetTmdbId) return true;
+      if (targetTitleKey && `${m.type || 'movie'}-${(m.title || '').toLowerCase().trim().replace(/[^a-z0-9]/g, '')}-${m.year}` === targetTitleKey) return true;
+      return false;
+    };
+
     setMediaItems(prev => {
-      const next = prev.filter(m => m.id !== mediaId);
+      const next = prev.filter(m => !isMatch(m));
       saveMediaCache(next);
       return next;
     });
     setUserStates(prev => {
       const next = { ...prev };
-      delete next[mediaId];
+      for (const key of Object.keys(next)) {
+        const item = mediaItems.find(m => m.id === key);
+        if (key === mediaId || (item && isMatch(item))) {
+          delete next[key];
+        }
+      }
       saveUserStates(next);
       return next;
     });
@@ -938,7 +1078,7 @@ export function useMediaLibrary() {
       return next;
     });
     recordLibraryChange('delete', mediaId);
-  }, []);
+  }, [mediaItems]);
 
   // Import Recent Changes (Non-destructive MERGE into current library)
   const importRecentChanges = useCallback((pkg: RecentChangesPackage) => {
@@ -1049,8 +1189,8 @@ export function useMediaLibrary() {
   const resetAll = useCallback(async () => {
     resetLibraryToDefault();
     const [netflixMovies, netflixSeries] = await Promise.all([
-      fetchNetflixTop10Movies(settings.tmdbApiKey),
-      fetchNetflixTop10Series(settings.tmdbApiKey),
+      fetchNetflixTop10Movies(settings.omdbApiKey),
+      fetchNetflixTop10Series(settings.omdbApiKey),
     ]);
     const liveMedia = [...netflixMovies, ...netflixSeries];
     setMediaItems(liveMedia);
@@ -1058,7 +1198,7 @@ export function useMediaLibrary() {
     setUserStates({});
     setCustomLists([]);
     setSettings(loadUserSettings());
-  }, [settings.tmdbApiKey]);
+  }, [settings.omdbApiKey]);
 
   const restoreBackup = useCallback((jsonStr: string) => {
     const result = importLibraryBackup(jsonStr);
@@ -1071,6 +1211,76 @@ export function useMediaLibrary() {
       document.documentElement.setAttribute('data-theme', loadedSettings.theme);
     }
     return result;
+  }, []);
+
+  // One-click action: Reload all movies/series album art and banners
+  const reloadAllArtwork = useCallback(
+    async (onProgress?: (count: number, total: number) => void) => {
+      const current = loadMediaCache();
+      const total = current.length;
+      let updatedCount = 0;
+
+      const updatedMedia = [...current];
+      for (let i = 0; i < current.length; i++) {
+        const item = current[i];
+        try {
+          const { details } = await fetchDetailsWithFallback(item, settings.tmdbApiKey, settings.omdbApiKey);
+          if (details.posterUrl || details.backdropUrl) {
+            updatedMedia[i] = {
+              ...item,
+              ...details,
+              posterUrl: details.posterUrl || item.posterUrl,
+              fallbackPosterUrl: details.posterUrl || item.fallbackPosterUrl || item.posterUrl,
+              backdropUrl: details.backdropUrl || item.backdropUrl || item.posterUrl,
+            };
+            updatedCount++;
+          }
+        } catch (err) {
+          console.warn('Artwork reload failed for item:', item.id, err);
+        }
+        if (onProgress) onProgress(i + 1, total);
+      }
+
+      const { cleanMedia, cleanStates, cleanLists } = deduplicateMediaItemsAndStates(
+        updatedMedia,
+        loadUserStates(),
+        loadCustomLists()
+      );
+
+      saveMediaCache(cleanMedia);
+      saveUserStates(cleanStates);
+      saveCustomLists(cleanLists);
+      setMediaItems(cleanMedia);
+      setUserStates(cleanStates);
+      setCustomLists(cleanLists);
+
+      return { total, updatedCount };
+    },
+    [settings.tmdbApiKey, settings.omdbApiKey]
+  );
+
+  // One-click action: Remove all duplicate titles across media cache, user states & lists
+  const removeAllDuplicates = useCallback(() => {
+    const currentMedia = loadMediaCache();
+    const currentStates = loadUserStates();
+    const currentLists = loadCustomLists();
+
+    const { cleanMedia, cleanStates, cleanLists } = deduplicateMediaItemsAndStates(
+      currentMedia,
+      currentStates,
+      currentLists
+    );
+
+    const removedCount = currentMedia.length - cleanMedia.length;
+
+    saveMediaCache(cleanMedia);
+    saveUserStates(cleanStates);
+    saveCustomLists(cleanLists);
+    setMediaItems(cleanMedia);
+    setUserStates(cleanStates);
+    setCustomLists(cleanLists);
+
+    return { beforeCount: currentMedia.length, afterCount: cleanMedia.length, removedCount };
   }, []);
 
   return {
@@ -1108,5 +1318,7 @@ export function useMediaLibrary() {
     deleteMediaItem,
     importRecentChanges,
     refreshLibrary,
+    reloadAllArtwork,
+    removeAllDuplicates,
   };
 }

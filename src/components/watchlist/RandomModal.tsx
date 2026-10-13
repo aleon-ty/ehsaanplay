@@ -22,7 +22,7 @@ export const RandomModal: React.FC<RandomModalProps> = ({
 }) => {
   if (!isOpen || !item) return null;
 
-  const rating = userState?.personalRating || item.tmdbRating;
+  const rating = userState?.personalRating || (item.imdbRating || 0);
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-xs p-4 animate-fade-in">

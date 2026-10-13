@@ -9,6 +9,7 @@ interface HeaderProps {
   onSelectTab: (tab: ActiveTab) => void;
   onOpenSearch: () => void;
   onRandomPick: () => void;
+  onOpenImdbPreview?: () => void;
   autoHideHeader?: boolean;
   swapSearchAndLists?: boolean;
   onTriggerSwapConfirm?: () => void;
@@ -19,22 +20,19 @@ export const Header: React.FC<HeaderProps> = ({
   onSelectTab,
   onOpenSearch,
   onRandomPick,
+  onOpenImdbPreview,
   autoHideHeader = true,
   swapSearchAndLists = false,
   onTriggerSwapConfirm,
 }) => {
-  const { isInstallable, isInstalled, isIOS, install } = usePWAInstall();
+  const { isInstallable, isInstalled, install } = usePWAInstall();
   const { isFullscreen, toggleFullscreen } = useFullscreen();
-  const [showIOSModal, setShowIOSModal] = useState(false);
   const [isVisible, setIsVisible] = useState(true);
   const lastScrollYRef = useRef(0);
 
   const handleHeaderInstall = async () => {
-    // ALWAYS attempt native install window first; guide is only a fallback
-    const success = await install();
-    if (!success) {
-      setShowIOSModal(true);
-    }
+    // Immediately awake native browser install prompt dialog window
+    await install();
   };
 
   // Long press detection on the top corner action button (Search or Lists)
@@ -260,6 +258,8 @@ export const Header: React.FC<HeaderProps> = ({
             <span>Random Pick</span>
           </button>
 
+
+
           {/* PWA Install Button — Located directly LEFT to Search as requested */}
           {!isInstalled && (
             <button
@@ -317,39 +317,6 @@ export const Header: React.FC<HeaderProps> = ({
           </button>
         </div>
       </div>
-
-      {/* PWA Installation Guide Modal for iOS & Browsers */}
-      {showIOSModal && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4 animate-fade-in">
-          <div className="w-full max-w-sm rounded-3xl bg-[var(--modal-bg)] p-6 shadow-2xl border border-[var(--border-subtle)] text-[var(--text-primary)] space-y-3.5 animate-scale-up">
-            <div className="flex items-center gap-2.5">
-              <div className="w-9 h-9 rounded-xl bg-[var(--accent-secondary)] text-[var(--accent-secondary-text)] flex items-center justify-center">
-                <Download className="w-4 h-4 stroke-[2.5]" />
-              </div>
-              <h3 className="text-base font-black">Install Standalone Web App</h3>
-            </div>
-            
-            {isIOS ? (
-              <p className="text-xs text-[var(--text-secondary)] leading-relaxed">
-                1. Tap the <strong className="text-[var(--text-primary)]">Share</strong> icon in Safari toolbar.<br />
-                2. Scroll down and choose <strong className="text-[var(--text-primary)]">Add to Home Screen</strong>.
-              </p>
-            ) : (
-              <p className="text-xs text-[var(--text-secondary)] leading-relaxed">
-                1. In Chrome / Edge / Brave, click the <strong className="text-[var(--text-primary)]">Install</strong> icon (⊕) in the browser address bar, or open the browser menu (<strong className="text-[var(--text-primary)]">⋮</strong>).<br />
-                2. Choose <strong className="text-[var(--text-primary)]">Install EHSAAN PLAY</strong> or <strong className="text-[var(--text-primary)]">Add to Home Screen</strong>.
-              </p>
-            )}
-
-            <button
-              onClick={() => setShowIOSModal(false)}
-              className="mt-2 w-full rounded-2xl bg-[var(--accent-primary)] py-2.5 text-xs font-black text-[var(--bg-primary)] hover:opacity-90 active:scale-95 transition"
-            >
-              Got it
-            </button>
-          </div>
-        </div>
-      )}
     </header>
   );
 };

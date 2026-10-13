@@ -1,8 +1,7 @@
 import { MediaItem } from '../types/movie';
 
 export const ARTWORK_CACHE_NAME = 'ehsaan-movie-offline-images-v1';
-const LEGACY_ARTWORK_CACHES = ['ehsaan-movie-artwork-v1', 'media-poster-cache', 'tmdb-artwork-cache'];
-const TMDB_IMAGE_BASE = 'https://image.tmdb.org/t/p';
+const LEGACY_ARTWORK_CACHES = ['ehsaan-movie-artwork-v1', 'media-poster-cache'];
 
 export interface ImageCacheStats {
   count: number;
@@ -31,38 +30,25 @@ const objectUrlMap = new Map<string, string>();
 const MAX_OBJECT_URLS = 250;
 
 /**
- * Normalizes any relative TMDB path or URL to a canonical absolute HTTPS URL
+ * Normalizes any artwork path or URL to a canonical absolute HTTPS URL
  */
 export function resolveArtworkUrl(
   rawPath: string | null | undefined,
-  size: 'w342' | 'w500' | 'w780' | 'original' = 'w500'
+  _size: 'w342' | 'w500' | 'w780' | 'original' = 'w500'
 ): string {
   if (!rawPath || typeof rawPath !== 'string') return '';
   const trimmed = rawPath.trim();
   if (!trimmed) return '';
 
-  if (trimmed.startsWith('data:')) {
+  if (trimmed.startsWith('data:') || trimmed.startsWith('http://') || trimmed.startsWith('https://')) {
     return trimmed;
   }
 
-  // Normalize TMDB image resolution even if already an absolute URL
-  if (trimmed.includes('image.tmdb.org/t/p/')) {
-    return trimmed.replace(/\/t\/p\/(w[0-9]+|original)\//, `/t/p/${size}/`);
-  }
-
-  if (trimmed.startsWith('http://') || trimmed.startsWith('https://')) {
-    return trimmed;
-  }
-
-  const clean = trimmed.startsWith('/') ? trimmed : `/${trimmed}`;
-  return `${TMDB_IMAGE_BASE}/${size}${clean}`;
+  return trimmed;
 }
 
 /**
  * Centralized Artwork Resolver
- * Every image component uses this function to resolve the display source.
- * In Online mode: returns the canonical TMDB URL.
- * In Offline mode: resolves strictly from Cache API without network fallback.
  */
 export async function getArtworkDisplaySrc(
   rawPath: string | null | undefined,
@@ -72,45 +58,18 @@ export async function getArtworkDisplaySrc(
   const canonicalUrl = resolveArtworkUrl(rawPath, size);
   if (!canonicalUrl) return null;
 
-  // If already in memory as object URL, return immediately
   if (objectUrlMap.has(canonicalUrl)) {
     return objectUrlMap.get(canonicalUrl)!;
   }
 
   const isActuallyOffline = isOfflineMode || (typeof navigator !== 'undefined' && !navigator.onLine);
 
-  // Offline or cache-first lookup: Check Cache API across all size variants and legacy caches
   if (typeof window !== 'undefined' && 'caches' in window) {
     try {
       const cacheNames = [ARTWORK_CACHE_NAME, ...LEGACY_ARTWORK_CACHES];
       for (const cName of cacheNames) {
         const cache = await caches.open(cName);
-
-        // 1. Try exact canonical URL match
-        let match = await cache.match(canonicalUrl, { ignoreSearch: true, ignoreVary: true });
-
-        // 2. Try alternate size variants (w500, w780, w342, original) if size differs
-        if (!match && rawPath && (rawPath.startsWith('/') || rawPath.includes('image.tmdb.org'))) {
-          const sizes: Array<'w500' | 'w780' | 'w342' | 'original'> = ['w500', 'w780', 'w342', 'original'];
-          for (const s of sizes) {
-            if (s === size) continue;
-            const altUrl = resolveArtworkUrl(rawPath, s);
-            match = await cache.match(altUrl, { ignoreSearch: true, ignoreVary: true });
-            if (match) break;
-          }
-        }
-
-        // 3. Fallback: Search keys for path suffix / filename matching
-        if (!match && rawPath) {
-          const filename = rawPath.split('/').pop()?.split('?')[0];
-          if (filename && filename.length > 4) {
-            const keys = await cache.keys();
-            const matchedKey = keys.find(k => k.url.includes(filename));
-            if (matchedKey) {
-              match = await cache.match(matchedKey);
-            }
-          }
-        }
+        const match = await cache.match(canonicalUrl, { ignoreSearch: true, ignoreVary: true });
 
         if (match) {
           const blob = await match.blob();
@@ -136,17 +95,15 @@ export async function getArtworkDisplaySrc(
     }
   }
 
-  // If online and not offline mode, return network URL directly
   if (!isActuallyOffline) {
     return canonicalUrl;
   }
 
-  // In offline mode with no cache hit: return null (graceful placeholder)
   return null;
 }
 
 /**
- * Get accurate storage metrics for the artwork cache
+ * Storage metrics for the artwork cache
  */
 export async function getImageCacheStats(): Promise<ImageCacheStats> {
   if (typeof window === 'undefined' || !('caches' in window)) {
@@ -228,8 +185,7 @@ export async function checkLibraryCacheStatus(items: MediaItem[]): Promise<Cache
 }
 
 /**
- * Robust, concurrency-controlled Pre-cache system
- * Safely downloads missing artwork with validation and error isolation.
+ * Pre-cache system
  */
 export async function preCacheLibraryImages(
   items: MediaItem[],
@@ -249,7 +205,6 @@ export async function preCacheLibraryImages(
   try {
     const cache = await caches.open(ARTWORK_CACHE_NAME);
 
-    // 1. Collect all unique canonical URLs
     const urlSet = new Set<string>();
     for (const item of items) {
       const poster = resolveArtworkUrl(item.posterUrl, 'w500');
@@ -270,7 +225,6 @@ export async function preCacheLibraryImages(
       };
     }
 
-    // 2. Identify already cached vs missing
     const urlsToFetch: string[] = [];
     let alreadyCachedCount = 0;
 
@@ -291,7 +245,6 @@ export async function preCacheLibraryImages(
       onProgress(completed, allUrls.length, newlyCached, failedCount);
     }
 
-    // 3. Controlled concurrency queue (5 simultaneous workers)
     const CONCURRENCY = 5;
     const queue = [...urlsToFetch];
 
@@ -302,18 +255,14 @@ export async function preCacheLibraryImages(
 
         try {
           const controller = new AbortController();
-          const timeoutId = setTimeout(() => controller.abort(), 12000); // 12s timeout
+          const timeoutId = setTimeout(() => controller.abort(), 12000);
 
-          const res = await fetch(url, {
-            signal: controller.signal,
-          });
+          const res = await fetch(url, { signal: controller.signal });
           clearTimeout(timeoutId);
 
           if (res.ok && res.status === 200) {
             const blob = await res.blob();
-
-            // Validate that we received an actual image
-            if (blob.size > 200 && (blob.type.includes('image') || url.includes('.jpg') || url.includes('.png') || url.includes('.webp'))) {
+            if (blob.size > 200) {
               const cacheResponse = new Response(blob, {
                 status: 200,
                 statusText: 'OK',
@@ -324,33 +273,6 @@ export async function preCacheLibraryImages(
                 },
               });
               await cache.put(url, cacheResponse);
-
-              // Also store clones for other size variants of this artwork
-              const filename = url.split('/').pop()?.split('?')[0];
-              if (filename && filename.length > 4 && url.includes('image.tmdb.org/t/p/')) {
-                for (const s of ['w342', 'w500', 'w780', 'original'] as const) {
-                  const altSizeUrl = `https://image.tmdb.org/t/p/${s}/${filename}`;
-                  if (altSizeUrl !== url) {
-                    try {
-                      await cache.put(
-                        altSizeUrl,
-                        new Response(blob, {
-                          status: 200,
-                          statusText: 'OK',
-                          headers: {
-                            'Content-Type': blob.type || 'image/jpeg',
-                            'Content-Length': String(blob.size),
-                            'Cache-Control': 'public, max-age=31536000, immutable',
-                          },
-                        })
-                      );
-                    } catch {
-                      // ignore individual variant errors
-                    }
-                  }
-                }
-              }
-
               newlyCached++;
             } else {
               failedCount++;
@@ -359,7 +281,6 @@ export async function preCacheLibraryImages(
             failedCount++;
           }
         } catch {
-          // Individual image failure does NOT abort the operation
           failedCount++;
         } finally {
           completed++;
@@ -370,7 +291,6 @@ export async function preCacheLibraryImages(
       }
     };
 
-    // Run workers concurrently
     const workers = Array.from({ length: Math.min(CONCURRENCY, urlsToFetch.length) }, () => worker());
     await Promise.all(workers);
 
@@ -395,10 +315,9 @@ export async function preCacheLibraryImages(
 }
 
 /**
- * Safely clears all artwork storage and revokes active memory blobs
+ * Clears artwork storage
  */
 export async function clearImageCache(): Promise<void> {
-  // Revoke all in-memory Blob URLs
   for (const url of objectUrlMap.values()) {
     try {
       URL.revokeObjectURL(url);
@@ -411,7 +330,6 @@ export async function clearImageCache(): Promise<void> {
   if (typeof window !== 'undefined' && 'caches' in window) {
     try {
       await caches.delete(ARTWORK_CACHE_NAME);
-      // Clean up any legacy caches
       for (const legacy of LEGACY_ARTWORK_CACHES) {
         await caches.delete(legacy);
       }

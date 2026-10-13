@@ -4,7 +4,9 @@ import {
   PersonalMediaState,
   CustomList,
 } from '../../types/movie';
-import { KNOWN_TV_SHOWS_METADATA } from '../../services/tmdb';
+import { KNOWN_TV_SHOWS_METADATA } from '../../data/curatedCatalog';
+import { fetchDetailsWithFallback } from '../../services/metadataFallback';
+import { loadUserSettings, saveMediaCache, loadMediaCache } from '../../services/storage';
 import { SafeImage } from '../common/SafeImage';
 import { StarRating } from '../common/StarRating';
 import { StreamingBrandIcon } from '../common/StreamingBrandIcon';
@@ -150,6 +152,7 @@ interface MoviePreviewModalProps {
   onToggleTVEpisode: (id: string, season: number, episode: number, item?: MediaItem) => void;
   onToggleSeasonEpisodes?: (id: string, season: number, episodeNumbers: number[], forceMarkDone: boolean, item?: MediaItem) => void;
   onAddItemToList: (listId: string, mediaId: string) => void;
+  onOpenImdbPreview?: (imdbIdOrUrl: string) => void;
 }
 
 export const MoviePreviewModal: React.FC<MoviePreviewModalProps> = ({
@@ -169,6 +172,7 @@ export const MoviePreviewModal: React.FC<MoviePreviewModalProps> = ({
   onToggleTVEpisode,
   onToggleSeasonEpisodes,
   onAddItemToList,
+  onOpenImdbPreview,
 }) => {
   const [item, setItem] = useState<MediaItem | null>(initialItem);
   const [isPlayingTrailer, setIsPlayingTrailer] = useState(false);
@@ -179,6 +183,83 @@ export const MoviePreviewModal: React.FC<MoviePreviewModalProps> = ({
   const [isAddingToList, setIsAddingToList] = useState(false);
   const [showCustomizer, setShowCustomizer] = useState(false);
   const [showRearrangeModal, setShowRearrangeModal] = useState(false);
+  const [reloadingType, setReloadingType] = useState<'poster' | 'banner' | 'all' | null>(null);
+  const [reloadFeedback, setReloadFeedback] = useState<string | null>(null);
+
+  const handleReloadSingleArtwork = async (target: 'poster' | 'banner' | 'all') => {
+    if (!item || reloadingType !== null) return;
+    setReloadingType(target);
+    setReloadFeedback(null);
+
+    try {
+      const settings = loadUserSettings();
+      const { details } = await fetchDetailsWithFallback(
+        item,
+        settings.tmdbApiKey,
+        settings.omdbApiKey
+      );
+
+      let updatedPoster = item.posterUrl;
+      let updatedFallbackPoster = item.fallbackPosterUrl;
+      let updatedBackdrop = item.backdropUrl;
+
+      if (target === 'poster' || target === 'all') {
+        if (details.posterUrl) {
+          updatedPoster = details.posterUrl;
+          updatedFallbackPoster = details.posterUrl;
+        }
+      }
+
+      if (target === 'banner' || target === 'all') {
+        if (details.backdropUrl) {
+          updatedBackdrop = details.backdropUrl;
+        } else if (details.posterUrl && !updatedBackdrop) {
+          updatedBackdrop = details.posterUrl;
+        }
+      }
+
+      const updatedItem: MediaItem = {
+        ...item,
+        ...details,
+        posterUrl: updatedPoster || item.posterUrl,
+        fallbackPosterUrl: updatedFallbackPoster || item.fallbackPosterUrl || item.posterUrl,
+        backdropUrl: updatedBackdrop || item.backdropUrl || item.posterUrl,
+      };
+
+      setItem(updatedItem);
+
+      // Save to local storage media cache
+      const cache = loadMediaCache();
+      const updatedCache = cache.map(m => (m.id === item.id ? updatedItem : m));
+      if (!updatedCache.some(m => m.id === item.id)) {
+        updatedCache.push(updatedItem);
+      }
+      saveMediaCache(updatedCache);
+
+      if (onHydrateDetails) {
+        onHydrateDetails(updatedItem);
+      }
+
+      const msg =
+        target === 'poster'
+          ? 'Poster reloaded'
+          : target === 'banner'
+          ? 'Banner reloaded'
+          : 'Poster & Banner reloaded';
+      setReloadFeedback(msg);
+      setTimeout(() => {
+        setReloadFeedback(null);
+      }, 3500);
+    } catch (err) {
+      console.warn('Failed to reload artwork for title:', err);
+      setReloadFeedback('Reload failed');
+      setTimeout(() => {
+        setReloadFeedback(null);
+      }, 3000);
+    } finally {
+      setReloadingType(null);
+    }
+  };
 
   // Load customizable hero options
   const [heroCustomizer, setHeroCustomizer] = useState<HeroCustomizerConfig>(() => {
@@ -301,7 +382,7 @@ export const MoviePreviewModal: React.FC<MoviePreviewModalProps> = ({
   const personalRating = userState?.personalRating || 0;
 
   // TV Episode and season calculations (Prioritizes accurate known metadata over outdated cache)
-  const knownMeta = item.type === 'tv' && item.tmdbId ? KNOWN_TV_SHOWS_METADATA[item.tmdbId] : undefined;
+  const knownMeta = item.type === 'tv' && item.id ? KNOWN_TV_SHOWS_METADATA[item.id] : undefined;
   const seasonsList = (item.seasons && item.seasons.length > 0)
     ? (knownMeta?.seasons && knownMeta.seasons.length > item.seasons.length ? knownMeta.seasons : item.seasons)
     : (knownMeta?.seasons || []);
@@ -503,6 +584,88 @@ export const MoviePreviewModal: React.FC<MoviePreviewModalProps> = ({
                       disabled={!heroCustomizer.artOn}
                       className="w-full h-2 bg-[var(--chip-bg)] rounded-lg appearance-none cursor-pointer accent-[var(--accent-primary)] disabled:opacity-30"
                     />
+                  </div>
+
+                  {/* REFRESH ARTWORK & BANNER (THIS TITLE ONLY) */}
+                  <div className="border-t border-[var(--border-subtle)] my-4" />
+                  <div className="text-[11px] font-black text-[var(--text-secondary)] tracking-wider uppercase mb-3 flex items-center justify-between">
+                    <span>REFRESH ARTWORK (THIS TITLE):</span>
+                    {reloadFeedback && (
+                      <span className="text-[10px] font-bold text-emerald-500 animate-fade-in flex items-center gap-1">
+                        <Check className="w-3 h-3" /> {reloadFeedback}
+                      </span>
+                    )}
+                  </div>
+
+                  <div className="space-y-2 text-xs">
+                    {/* Option 1: Reload Poster Image */}
+                    <div className="flex items-center justify-between py-1 bg-[var(--chip-bg)] p-2.5 rounded-2xl border border-[var(--border-subtle)]">
+                      <div className="flex flex-col">
+                        <span className="font-bold text-[var(--text-primary)]">Poster Image</span>
+                        <span className="text-[10px] text-[var(--text-secondary)]">Fetch high-res poster artwork</span>
+                      </div>
+                      <button
+                        onClick={() => handleReloadSingleArtwork('poster')}
+                        disabled={reloadingType !== null}
+                        className="px-3 py-1.5 rounded-full text-xs font-bold bg-[var(--accent-primary)] text-[var(--bg-primary)] hover:opacity-90 active:scale-95 transition disabled:opacity-50 flex items-center gap-1.5 shrink-0"
+                      >
+                        {reloadingType === 'poster' ? (
+                          <>
+                            <RotateCcw className="w-3 h-3 animate-spin" />
+                            <span>Reloading...</span>
+                          </>
+                        ) : (
+                          <>
+                            <RotateCcw className="w-3 h-3" />
+                            <span>Reload Poster</span>
+                          </>
+                        )}
+                      </button>
+                    </div>
+
+                    {/* Option 2: Reload Banner Artwork */}
+                    <div className="flex items-center justify-between py-1 bg-[var(--chip-bg)] p-2.5 rounded-2xl border border-[var(--border-subtle)]">
+                      <div className="flex flex-col">
+                        <span className="font-bold text-[var(--text-primary)]">Backdrop Banner</span>
+                        <span className="text-[10px] text-[var(--text-secondary)]">Fetch high-res hero banner</span>
+                      </div>
+                      <button
+                        onClick={() => handleReloadSingleArtwork('banner')}
+                        disabled={reloadingType !== null}
+                        className="px-3 py-1.5 rounded-full text-xs font-bold bg-[var(--accent-primary)] text-[var(--bg-primary)] hover:opacity-90 active:scale-95 transition disabled:opacity-50 flex items-center gap-1.5 shrink-0"
+                      >
+                        {reloadingType === 'banner' ? (
+                          <>
+                            <RotateCcw className="w-3 h-3 animate-spin" />
+                            <span>Reloading...</span>
+                          </>
+                        ) : (
+                          <>
+                            <RotateCcw className="w-3 h-3" />
+                            <span>Reload Banner</span>
+                          </>
+                        )}
+                      </button>
+                    </div>
+
+                    {/* Option 3: Reload Both Poster & Banner */}
+                    <button
+                      onClick={() => handleReloadSingleArtwork('all')}
+                      disabled={reloadingType !== null}
+                      className="w-full py-2 px-3 rounded-2xl text-xs font-bold bg-[var(--chip-bg)] hover:bg-[var(--border-subtle)] text-[var(--text-primary)] border border-[var(--border-subtle)] active:scale-98 transition disabled:opacity-50 flex items-center justify-center gap-2 mt-1"
+                    >
+                      {reloadingType === 'all' ? (
+                        <>
+                          <RotateCcw className="w-3.5 h-3.5 animate-spin text-[var(--accent-primary)]" />
+                          <span>Reloading Poster & Banner...</span>
+                        </>
+                      ) : (
+                        <>
+                          <Sparkles className="w-3.5 h-3.5 text-[var(--accent-primary)]" />
+                          <span>Reload Poster & Banner Together</span>
+                        </>
+                      )}
+                    </button>
                   </div>
 
                   {/* ACTION BUTTON CONTROLS */}
@@ -761,15 +924,12 @@ export const MoviePreviewModal: React.FC<MoviePreviewModalProps> = ({
               <Pencil className={`w-4 h-4 ${heroCustomizer.artOn ? 'text-[var(--accent-primary)] sm:text-white' : 'text-[var(--accent-primary)]'}`} />
             </button>
 
-            {/* Close Button */}
+            {/* Filled Blood Red Cross Close Button */}
             <button
               onClick={onClose}
               aria-label="Close preview"
-              className={`w-8 h-8 sm:w-9 sm:h-9 rounded-full flex items-center justify-center transition border active:scale-95 ${
-                heroCustomizer.artOn
-                  ? 'bg-[var(--chip-bg)] sm:bg-black/50 hover:bg-[var(--chip-bg)]/80 sm:hover:bg-black/70 text-[var(--text-primary)] sm:text-white border-[var(--border-subtle)] sm:border-white/15 sm:backdrop-blur-md'
-                  : 'bg-[var(--chip-bg)] text-[var(--text-primary)] hover:bg-[var(--chip-bg)]/80 border-[var(--border-subtle)]'
-              }`}
+              className="w-8 h-8 sm:w-9 sm:h-9 rounded-full flex items-center justify-center transition active:scale-95 bg-red-600 hover:bg-red-700 text-white shadow-md border border-red-700 shrink-0"
+              title="Close (Esc)"
             >
               <X className="w-4 h-4 stroke-[2.5]" />
             </button>
@@ -804,6 +964,7 @@ export const MoviePreviewModal: React.FC<MoviePreviewModalProps> = ({
             }`}>
               <SafeImage
                 src={item.posterUrl || item.backdropUrl}
+                fallbackSrc={item.fallbackPosterUrl}
                 alt={item.title}
                 fallbackTitle={item.title}
                 className="w-full h-full object-cover"
@@ -889,8 +1050,24 @@ export const MoviePreviewModal: React.FC<MoviePreviewModalProps> = ({
                       ? 'bg-[var(--chip-bg)] sm:bg-black/60 text-[var(--text-primary)] sm:text-white border-[var(--border-subtle)] sm:border-white/20'
                       : 'bg-[var(--chip-bg)] text-[var(--text-primary)] border-[var(--border-subtle)]'
                   }`}>
-                    <Star className="w-3.5 h-3.5 fill-[var(--accent-primary)] text-[var(--accent-primary)]" />
-                    <span className="tabular-nums font-black">{item.tmdbRating > 0 ? item.tmdbRating.toFixed(1) : '8.8'} / 10</span>
+                    {item.imdbRating && item.imdbRating > 0 ? (
+                      <>
+                        <Star className="w-3.5 h-3.5 fill-amber-500 text-amber-500" />
+                        <span className="tabular-nums font-black">{item.imdbRating.toFixed(1)} / 10</span>
+                        <span className="text-[10px] uppercase font-bold opacity-75">IMDb</span>
+                      </>
+                    ) : (item.imdbRating || 0) > 0 ? (
+                      <>
+                        <Star className="w-3.5 h-3.5 fill-[var(--accent-primary)] text-[var(--accent-primary)]" />
+                        <span className="tabular-nums font-black">{(item.imdbRating || 0).toFixed(1)} / 10</span>
+                        <span className="text-[10px] uppercase font-bold opacity-75">OMDb</span>
+                      </>
+                    ) : (
+                      <>
+                        <Star className="w-3.5 h-3.5 fill-[var(--accent-primary)] text-[var(--accent-primary)]" />
+                        <span className="tabular-nums font-black">8.8 / 10</span>
+                      </>
+                    )}
                   </span>
                 )}
 
@@ -917,7 +1094,7 @@ export const MoviePreviewModal: React.FC<MoviePreviewModalProps> = ({
                 {heroCustomizer.showMatchScore && (
                   <span className="inline-flex items-center gap-1 px-3 py-1 rounded-full bg-[var(--bg-card-yellow)] text-[var(--text-card-yellow)] border border-[var(--border-subtle)] text-xs font-extrabold shadow-xs">
                     <Sparkles className="w-3 h-3" />
-                    <span>{Math.min(99, Math.max(82, Math.round((item.tmdbRating || 7.5) * 10 + 12)))}% Match</span>
+                    <span>{Math.min(99, Math.max(82, Math.round(((item.imdbRating || 0) || 7.5) * 10 + 12)))}% Match</span>
                   </span>
                 )}
 
@@ -1402,6 +1579,21 @@ export const MoviePreviewModal: React.FC<MoviePreviewModalProps> = ({
                         <strong className="text-[var(--text-primary)]">{item.status}</strong>
                       </div>
                     )}
+                    {item.imdbId && onOpenImdbPreview && (
+                      <div className="flex justify-between items-center border-b border-[var(--border-subtle)] pb-1.5 sm:col-span-2 md:col-span-3 pt-1">
+                        <span className="flex items-center gap-1.5 font-bold">
+                          <span className="px-1.5 py-0.5 rounded bg-[#F5C518] text-black text-[10px] font-black">IMDb</span>
+                          <span>IMDb Link Preview:</span>
+                        </span>
+                        <button
+                          type="button"
+                          onClick={() => onOpenImdbPreview(item.imdbId!)}
+                          className="px-2.5 py-1 rounded-xl bg-[#F5C518]/20 hover:bg-[#F5C518]/35 text-[var(--text-primary)] text-xs font-bold transition active:scale-95 border border-amber-500/30 flex items-center gap-1 cursor-pointer"
+                        >
+                          <span>Inspect {item.imdbId}</span>
+                        </button>
+                      </div>
+                    )}
                   </div>
                 </div>
               </div>
@@ -1452,7 +1644,7 @@ export const MoviePreviewModal: React.FC<MoviePreviewModalProps> = ({
                 </div>
 
                 <div className="mt-4 pt-3 border-t border-[var(--border-subtle)] flex items-center justify-between text-[11px] text-[var(--text-secondary)]">
-                  <span>Availability verified via TMDB</span>
+                  <span>Availability verified via OMDb</span>
                   <span className="font-semibold text-[var(--accent-primary)]">4K / HD Support</span>
                 </div>
               </div>

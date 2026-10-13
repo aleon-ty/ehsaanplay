@@ -25,6 +25,7 @@ import {
   Maximize2,
   Share2,
   AlertTriangle,
+  Code2,
 } from 'lucide-react';
 
 interface StartGuideModalProps {
@@ -33,6 +34,7 @@ interface StartGuideModalProps {
   settings: UserSettings;
   onUpdateSettings: (partial: Partial<UserSettings>) => void;
   onRestoreBackup: (json: string) => ImportResult | boolean;
+  onOpenLicense?: () => void;
 }
 
 export const StartGuideModal: React.FC<StartGuideModalProps> = ({
@@ -41,9 +43,10 @@ export const StartGuideModal: React.FC<StartGuideModalProps> = ({
   settings,
   onUpdateSettings,
   onRestoreBackup,
+  onOpenLicense,
 }) => {
   const [currentStep, setCurrentStep] = useState<number>(0);
-  const [customKeyInput, setCustomKeyInput] = useState<string>(settings.tmdbApiKey || '');
+  const [customKeyInput, setCustomKeyInput] = useState<string>(settings.omdbApiKey || '');
   const [isKeySaved, setIsKeySaved] = useState<boolean>(false);
   const [restoreStatus, setRestoreStatus] = useState<{
     success: boolean;
@@ -54,7 +57,7 @@ export const StartGuideModal: React.FC<StartGuideModalProps> = ({
   const [installSuccess, setInstallSuccess] = useState(false);
   const [showPwaWarning, setShowPwaWarning] = useState(false);
 
-  const totalSteps = 6; // 0: Welcome, 1: TMDB, 2: Colors, 3: Privacy, 4: Restore, 5: Install PWA
+  const totalSteps = 6; // 0: Welcome, 1: OMDb, 2: Colors, 3: Privacy, 4: Restore, 5: Install PWA
 
   const handleForceComplete = useCallback(() => {
     setShowPwaWarning(false);
@@ -67,7 +70,10 @@ export const StartGuideModal: React.FC<StartGuideModalProps> = ({
   }, [onClose]);
 
   const handleComplete = useCallback(() => {
-    const isCurrentlyInstalled = isInstalled || installSuccess;
+    const isCurrentlyInstalled =
+      isInstalled ||
+      installSuccess ||
+      (typeof window !== 'undefined' && localStorage.getItem('ehsaan_pwa_installed') === 'true');
     if (!isCurrentlyInstalled) {
       setShowPwaWarning(true);
       return;
@@ -90,20 +96,13 @@ export const StartGuideModal: React.FC<StartGuideModalProps> = ({
   }, [currentStep]);
 
   const handleWarningInstallClick = async () => {
-    if (isInstallable) {
-      const success = await install();
-      if (success) {
-        setInstallSuccess(true);
-        setShowPwaWarning(false);
-        setTimeout(() => {
-          handleForceComplete();
-        }, 500);
-        return;
-      }
+    // Immediately awake native browser install prompt dialog
+    const success = await install();
+    if (success) {
+      setInstallSuccess(true);
     }
-    // If not immediately installable or failed, navigate user to Step 5 (Install PWA)
-    setCurrentStep(5);
     setShowPwaWarning(false);
+    handleForceComplete();
   };
 
   const handleGoToInstallStep = () => {
@@ -149,9 +148,9 @@ export const StartGuideModal: React.FC<StartGuideModalProps> = ({
 
   if (!isOpen) return null;
 
-  const handleSaveTmdbKey = () => {
+  const handleSaveOmdbKey = () => {
     const trimmed = customKeyInput.trim();
-    onUpdateSettings({ tmdbApiKey: trimmed });
+    onUpdateSettings({ omdbApiKey: trimmed });
     setIsKeySaved(true);
     setTimeout(() => setIsKeySaved(false), 2500);
   };
@@ -207,7 +206,7 @@ export const StartGuideModal: React.FC<StartGuideModalProps> = ({
 
   const stepLabels = [
     'Welcome',
-    'TMDB Data',
+    'OMDb Data',
     'Calm Colors',
     'Local Privacy',
     'Restore',
@@ -326,7 +325,7 @@ export const StartGuideModal: React.FC<StartGuideModalProps> = ({
               )}
               {currentStep === 1 && (
                 <div className="w-60 h-48 lg:w-68 lg:h-56 flex items-center justify-center animate-fade-in">
-                  <StickerTMDB />
+                  <StickerOMDb />
                 </div>
               )}
               {currentStep === 2 && (
@@ -354,7 +353,7 @@ export const StartGuideModal: React.FC<StartGuideModalProps> = ({
             {/* Bottom Philosophy Caption on Desktop */}
             <div className="relative z-10 w-full max-w-xs px-3.5 py-2 rounded-2xl bg-[var(--bg-surface-card)]/85 border border-[var(--border-subtle)] text-center text-[11px] font-semibold text-[var(--text-secondary)] shadow-2xs">
               {currentStep === 0 && 'Start fresh with zero sample clutter. Add only movies you love.'}
-              {currentStep === 1 && 'Connected with TMDB for rich posters, synopses, and cast.'}
+              {currentStep === 1 && 'Connected with OMDb API for rich posters and metadata.'}
               {currentStep === 2 && 'Material 3 colors tailored for daylight and midnight cinema.'}
               {currentStep === 3 && '100% private on your device with zero cloud telemetry.'}
               {currentStep === 4 && 'Have an exported backup? Restore your collection in seconds.'}
@@ -418,7 +417,7 @@ export const StartGuideModal: React.FC<StartGuideModalProps> = ({
                   </div>
                 )}
 
-                {/* Step 1: TMDB Cinema Data */}
+                {/* Step 1: OMDb Cinema Data */}
                 {currentStep === 1 && (
                   <div className="w-full flex flex-col items-center md:items-start space-y-3 sm:space-y-3.5 animate-fade-in">
                     <div className="space-y-0.5">
@@ -426,27 +425,27 @@ export const StartGuideModal: React.FC<StartGuideModalProps> = ({
                         Metadata Engine
                       </div>
                       <h2 className="text-2xl sm:text-3xl md:text-4xl font-black text-[var(--text-primary)] tracking-tight">
-                        TMDB Cinema Data
+                        OMDb Cinema Data
                       </h2>
                     </div>
 
                     {/* Mobile Sticker */}
                     <div className="md:hidden w-48 h-36 sm:w-56 sm:h-44 my-1 flex items-center justify-center">
-                      <StickerTMDB />
+                      <StickerOMDb />
                     </div>
 
                     <p className="text-xs sm:text-sm md:text-base text-[var(--text-secondary)] font-medium leading-relaxed max-w-sm md:max-w-lg">
-                      EHSAAN PLAY links seamlessly with The Movie Database (TMDB) to fetch real-time posters, trailers, synopses, ratings, and cast members.
+                      EHSAAN PLAY links seamlessly with OMDb API Database to fetch real-time posters, trailers, synopses, ratings, and cast members.
                     </p>
 
-                    {/* TMDB Status & Custom Key Card */}
+                    {/* OMDb Status & Custom Key Card */}
                     <div className="w-full max-w-sm md:max-w-lg bg-[var(--bg-surface-card)] p-3 sm:p-4 rounded-2xl sm:rounded-3xl border border-[var(--border-subtle)] space-y-2 text-left shadow-2xs">
                       <div className="flex items-center justify-between">
                         <div className="flex items-center gap-2 text-xs font-bold text-[var(--text-primary)]">
                           <Key className="w-4 h-4 text-[var(--accent-primary)]" />
                           <span>Global Discovery Status</span>
                         </div>
-                        <span className="px-2 py-0.5 rounded-full bg-emerald-500/10 text-emerald-600 text-[10px] font-black uppercase tracking-wider border border-emerald-500/20">
+                        <span className="px-2 py-0.5 rounded-full bg-[var(--chip-bg)] text-[var(--accent-primary)] text-[10px] font-bold uppercase tracking-wider border border-[var(--border-subtle)]">
                           ✓ Connected & Ready
                         </span>
                       </div>
@@ -454,14 +453,14 @@ export const StartGuideModal: React.FC<StartGuideModalProps> = ({
                       <div className="flex gap-2 pt-1">
                         <input
                           type="text"
-                          placeholder="Optional custom TMDB key"
+                          placeholder="Optional custom OMDb key"
                           value={customKeyInput}
                           onChange={e => setCustomKeyInput(e.target.value)}
                           className="flex-1 px-3 py-1.5 rounded-xl bg-[var(--chip-bg)] border border-[var(--border-subtle)] text-xs text-[var(--text-primary)] focus:outline-none focus:ring-1 focus:ring-[var(--accent-primary)]"
                         />
                         <button
                           type="button"
-                          onClick={handleSaveTmdbKey}
+                          onClick={handleSaveOmdbKey}
                           className="px-3.5 py-1.5 rounded-xl bg-[var(--accent-primary)] text-[var(--bg-primary)] text-xs font-bold hover:opacity-90 active:scale-95 transition shadow-xs shrink-0"
                         >
                           {isKeySaved ? 'Saved!' : 'Save'}
@@ -587,7 +586,7 @@ export const StartGuideModal: React.FC<StartGuideModalProps> = ({
 
                     <div className="w-full max-w-sm md:max-w-lg grid grid-cols-2 gap-2 text-left">
                       <div className="p-3 rounded-2xl bg-[var(--bg-surface-card)] border border-[var(--border-subtle)] space-y-0.5">
-                        <ShieldCheck className="w-4 h-4 text-emerald-600 mb-1" />
+                        <ShieldCheck className="w-4 h-4 text-[var(--accent-primary)] mb-1" />
                         <div className="text-xs font-bold text-[var(--text-primary)]">100% Private</div>
                         <div className="text-[11px] text-[var(--text-secondary)]">No ads, telemetry, or remote accounts</div>
                       </div>
@@ -597,6 +596,20 @@ export const StartGuideModal: React.FC<StartGuideModalProps> = ({
                         <div className="text-[11px] text-[var(--text-secondary)]">Works without network connection</div>
                       </div>
                     </div>
+
+                    {onOpenLicense && (
+                      <button
+                        type="button"
+                        onClick={onOpenLicense}
+                        className="w-full max-w-sm md:max-w-lg p-2.5 rounded-2xl bg-[var(--bg-surface-card)] hover:bg-[var(--chip-bg)] border border-[var(--border-subtle)] flex items-center justify-between text-xs font-bold text-[var(--text-primary)] transition active:scale-[0.99] cursor-pointer"
+                      >
+                        <div className="flex items-center gap-2">
+                          <Code2 className="w-4 h-4 text-[var(--accent-primary)]" />
+                          <span>GNU General Public License v3.0</span>
+                        </div>
+                        <span className="text-[11px] font-semibold text-[var(--text-secondary)]">View Terms →</span>
+                      </button>
+                    )}
                   </div>
                 )}
 
@@ -652,8 +665,8 @@ export const StartGuideModal: React.FC<StartGuideModalProps> = ({
                         <div
                           className={`p-2.5 rounded-xl text-xs font-bold flex items-center gap-2 ${
                             restoreStatus.success
-                              ? 'bg-emerald-500/10 text-emerald-600 border border-emerald-500/20'
-                              : 'bg-rose-500/10 text-rose-500 border border-rose-500/20'
+                              ? 'bg-[var(--chip-bg)] text-[var(--accent-primary)] border border-[var(--border-subtle)]'
+                              : 'bg-[var(--chip-bg)] text-[var(--text-muted)] border border-[var(--border-subtle)]'
                           }`}
                         >
                           {restoreStatus.success ? (
@@ -707,7 +720,7 @@ export const StartGuideModal: React.FC<StartGuideModalProps> = ({
 
                       <div className="p-2.5 sm:p-3 rounded-2xl bg-[var(--bg-surface-card)] border border-[var(--border-subtle)] space-y-0.5">
                         <div className="flex items-center gap-1.5 font-bold text-xs text-[var(--text-primary)]">
-                          <Zap className="w-3.5 h-3.5 text-amber-500" />
+                          <Zap className="w-3.5 h-3.5 text-[var(--accent-primary)]" />
                           <span>Instant Launch</span>
                         </div>
                         <p className="text-[11px] text-[var(--text-secondary)] leading-tight">
@@ -717,7 +730,7 @@ export const StartGuideModal: React.FC<StartGuideModalProps> = ({
 
                       <div className="p-2.5 sm:p-3 rounded-2xl bg-[var(--bg-surface-card)] border border-[var(--border-subtle)] space-y-0.5">
                         <div className="flex items-center gap-1.5 font-bold text-xs text-[var(--text-primary)]">
-                          <HardDrive className="w-3.5 h-3.5 text-emerald-600" />
+                          <HardDrive className="w-3.5 h-3.5 text-[var(--accent-primary)]" />
                           <span>Zero Bloat</span>
                         </div>
                         <p className="text-[11px] text-[var(--text-secondary)] leading-tight">
@@ -739,27 +752,30 @@ export const StartGuideModal: React.FC<StartGuideModalProps> = ({
                     {/* Install Action Card */}
                     <div className="w-full max-w-sm md:max-w-lg pt-0.5">
                       {isInstalled || installSuccess ? (
-                        <div className="p-3 rounded-2xl bg-emerald-500/10 text-emerald-600 border border-emerald-500/20 text-xs font-bold flex items-center justify-center gap-2">
-                          <CheckCircle2 className="w-4 h-4" />
+                        <div className="p-3 rounded-2xl bg-[var(--accent-secondary)] text-[var(--accent-secondary-text)] border border-[var(--border-subtle)] text-xs font-bold flex items-center justify-center gap-2">
+                          <CheckCircle2 className="w-4 h-4 text-[var(--accent-secondary-text)]" />
                           <span>App is installed on this device!</span>
                         </div>
-                      ) : isInstallable ? (
-                        <button
-                          type="button"
-                          onClick={handleInstallClick}
-                          className="w-full py-2.5 px-4 rounded-2xl bg-[var(--accent-primary)] text-[var(--bg-primary)] font-extrabold text-xs flex items-center justify-center gap-2 hover:opacity-90 active:scale-[0.98] transition shadow-xs"
-                        >
-                          <Download className="w-4 h-4" />
-                          <span>Install Web App Now</span>
-                        </button>
-                      ) : isIOS ? (
-                        <div className="p-2.5 rounded-2xl bg-[var(--chip-bg)] text-[var(--text-secondary)] text-[11px] font-medium flex items-center gap-2.5 text-left border border-[var(--border-subtle)]">
-                          <Share2 className="w-4 h-4 text-[var(--accent-primary)] shrink-0" />
-                          <span>On iOS Safari: Tap <strong>Share</strong>, then select <strong>Add to Home Screen</strong>.</span>
-                        </div>
                       ) : (
-                        <div className="p-2.5 rounded-2xl bg-[var(--chip-bg)] text-[var(--text-secondary)] text-[11px] font-medium text-center border border-[var(--border-subtle)]">
-                          <span>Tap browser menu (⋮), then choose <strong>Install App</strong> or <strong>Add to Home Screen</strong>.</span>
+                        <div className="space-y-2">
+                          <button
+                            type="button"
+                            onClick={handleInstallClick}
+                            className="w-full py-3 px-4 rounded-2xl bg-[var(--accent-primary)] text-[var(--bg-primary)] font-extrabold text-xs sm:text-sm flex items-center justify-center gap-2 hover:opacity-90 active:scale-[0.98] transition shadow-xs cursor-pointer"
+                          >
+                            <Download className="w-4 h-4 stroke-[2.5]" />
+                            <span>Install Web App Now</span>
+                          </button>
+                          {isIOS ? (
+                            <div className="p-2.5 rounded-2xl bg-[var(--chip-bg)] text-[var(--text-secondary)] text-[11px] font-medium flex items-center gap-2.5 text-left border border-[var(--border-subtle)]">
+                              <Share2 className="w-4 h-4 text-[var(--accent-primary)] shrink-0" />
+                              <span>On iOS Safari: Tap <strong>Share</strong>, then select <strong>Add to Home Screen</strong>.</span>
+                            </div>
+                          ) : (
+                            <div className="p-2.5 rounded-2xl bg-[var(--chip-bg)] text-[var(--text-secondary)] text-[11px] font-medium text-center border border-[var(--border-subtle)]">
+                              <span>Clicking above triggers the browser install prompt window.</span>
+                            </div>
+                          )}
                         </div>
                       )}
                     </div>
@@ -849,13 +865,13 @@ export const StartGuideModal: React.FC<StartGuideModalProps> = ({
         >
           <div className="w-full max-w-md bg-[var(--bg-primary)] text-[var(--text-primary)] rounded-[32px] sm:rounded-[36px] border border-[var(--border-subtle)] p-6 sm:p-7 shadow-2xl space-y-4 text-center animate-scale-up">
             {/* Warning Icon Badge */}
-            <div className="w-14 h-14 rounded-3xl bg-amber-500/15 text-amber-600 dark:text-amber-400 flex items-center justify-center mx-auto border border-amber-500/20">
+            <div className="w-14 h-14 rounded-3xl bg-[var(--chip-bg)] text-[var(--accent-primary)] flex items-center justify-center mx-auto border border-[var(--border-subtle)] shadow-xs">
               <AlertTriangle className="w-7 h-7 stroke-[2.5]" />
             </div>
 
             {/* Warning Header & Copy as requested */}
             <div className="space-y-2">
-              <div className="inline-flex items-center gap-1.5 px-3 py-0.5 rounded-full bg-amber-500/10 text-amber-700 dark:text-amber-300 text-[10px] font-black uppercase tracking-wider border border-amber-500/20">
+              <div className="inline-flex items-center gap-1.5 px-3 py-0.5 rounded-full bg-[var(--chip-bg)] text-[var(--accent-primary)] text-[10px] font-bold uppercase tracking-wider border border-[var(--border-subtle)]">
                 Display Recommendation Notice
               </div>
               <h3 className="text-sm sm:text-base font-black uppercase tracking-wide leading-snug text-[var(--text-primary)]">
@@ -877,46 +893,26 @@ export const StartGuideModal: React.FC<StartGuideModalProps> = ({
                 <span>Native UI Alignment: Smooth bottom dock and touch gestures</span>
               </div>
               <div className="flex items-center gap-2 font-bold text-[var(--text-primary)]">
-                <Zap className="w-3.5 h-3.5 text-amber-500 shrink-0" />
+                <Zap className="w-3.5 h-3.5 text-[var(--accent-primary)] shrink-0" />
                 <span>Instant Launch: 1-tap desktop/home screen launcher</span>
               </div>
             </div>
 
             {/* Action Buttons */}
             <div className="pt-2 flex flex-col gap-2">
-              {isInstallable ? (
-                <button
-                  type="button"
-                  onClick={handleWarningInstallClick}
-                  className="w-full py-3 px-4 rounded-2xl bg-[var(--accent-primary)] text-[var(--bg-primary)] font-extrabold text-xs sm:text-sm flex items-center justify-center gap-2 hover:opacity-90 active:scale-[0.98] transition shadow-xs"
-                >
-                  <Download className="w-4 h-4 stroke-[2.5]" />
-                  <span>Install Web App Now</span>
-                </button>
-              ) : isIOS ? (
-                <button
-                  type="button"
-                  onClick={handleGoToInstallStep}
-                  className="w-full py-3 px-4 rounded-2xl bg-[var(--accent-primary)] text-[var(--bg-primary)] font-extrabold text-xs sm:text-sm flex items-center justify-center gap-2 hover:opacity-90 active:scale-[0.98] transition shadow-xs"
-                >
-                  <Share2 className="w-4 h-4 stroke-[2.5]" />
-                  <span>View iOS Install Guide</span>
-                </button>
-              ) : (
-                <button
-                  type="button"
-                  onClick={handleGoToInstallStep}
-                  className="w-full py-3 px-4 rounded-2xl bg-[var(--accent-primary)] text-[var(--bg-primary)] font-extrabold text-xs sm:text-sm flex items-center justify-center gap-2 hover:opacity-90 active:scale-[0.98] transition shadow-xs"
-                >
-                  <Smartphone className="w-4 h-4 stroke-[2.5]" />
-                  <span>View Installation Page</span>
-                </button>
-              )}
+              <button
+                type="button"
+                onClick={handleWarningInstallClick}
+                className="w-full py-3 px-4 rounded-2xl bg-[var(--accent-primary)] text-[var(--bg-primary)] font-extrabold text-xs sm:text-sm flex items-center justify-center gap-2 hover:opacity-90 active:scale-[0.98] transition shadow-xs cursor-pointer"
+              >
+                <Download className="w-4 h-4 stroke-[2.5]" />
+                <span>Install Web App Now</span>
+              </button>
 
               <button
                 type="button"
                 onClick={handleForceComplete}
-                className="w-full py-2.5 px-4 rounded-2xl bg-[var(--chip-bg)] text-[var(--text-secondary)] hover:text-[var(--text-primary)] font-bold text-xs transition active:scale-98 border border-[var(--border-subtle)]"
+                className="w-full py-2.5 px-4 rounded-2xl bg-[var(--chip-bg)] text-[var(--text-secondary)] hover:text-[var(--text-primary)] font-bold text-xs transition active:scale-98 border border-[var(--border-subtle)] cursor-pointer"
               >
                 Continue Without Installing
               </button>
@@ -994,7 +990,7 @@ function StickerWelcome() {
   );
 }
 
-function StickerTMDB() {
+function StickerOMDb() {
   return (
     <svg viewBox="0 0 240 200" fill="none" xmlns="http://www.w3.org/2000/svg" className="w-full h-full drop-shadow-sm">
       <path
@@ -1027,7 +1023,7 @@ function StickerTMDB() {
       </g>
       <g transform="translate(150, 120)">
         <rect x="0" y="0" width="56" height="32" rx="10" fill="var(--bg-card-olive)" stroke="var(--text-card-olive)" strokeWidth="1.5" />
-        <text x="12" y="20" fontFamily="sans-serif" fontSize="11" fontWeight="900" fill="var(--text-card-olive)">TMDB</text>
+        <text x="12" y="20" fontFamily="sans-serif" fontSize="11" fontWeight="900" fill="var(--text-card-olive)">OMDb</text>
       </g>
     </svg>
   );

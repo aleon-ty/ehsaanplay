@@ -15,8 +15,10 @@ import { ListsView } from './components/lists/ListsView';
 import { SettingsView, SettingsTopicId } from './components/settings/SettingsView';
 import { MoviePreviewModal } from './components/preview/MoviePreviewModal';
 import { SearchModal } from './components/search/SearchModal';
+import { ImdbPreviewModal } from './components/imdb/ImdbPreviewModal';
 import { RandomModal } from './components/watchlist/RandomModal';
 import { StartGuideModal } from './components/onboarding/StartGuideModal';
+import { LicenseModal } from './components/common/LicenseModal';
 import { UpdateNotification } from './components/layout/UpdateNotification';
 import { SwapNavModal } from './components/common/SwapNavModal';
 import { usePWAUpdate } from './hooks/usePWAInstall';
@@ -58,11 +60,15 @@ export default function App() {
     clearCachedTitlesAndImages,
     restoreBackup,
     refreshLibrary,
+    reloadAllArtwork,
+    removeAllDuplicates,
   } = useMediaLibrary();
 
   const [activeTab, setActiveTab] = useState<ActiveTab>('home');
   const [selectedMedia, setSelectedMedia] = useState<MediaItem | null>(null);
   const [isSearchOpen, setIsSearchOpen] = useState(false);
+  const [isImdbPreviewOpen, setIsImdbPreviewOpen] = useState(false);
+  const [imdbPreviewInput, setImdbPreviewInput] = useState('');
   const [randomModalItem, setRandomModalItem] = useState<MediaItem | null>(null);
   const [watchlistInitialFilter, setWatchlistInitialFilter] = useState<string>('watchlist');
   const [backToastMessage, setBackToastMessage] = useState<string | null>(null);
@@ -78,6 +84,7 @@ export default function App() {
       return false;
     }
   });
+  const [isLicenseModalOpen, setIsLicenseModalOpen] = useState<boolean>(false);
 
   useEffect(() => {
     // Listen for incoming Wi-Fi transfers across all screens persistently
@@ -145,6 +152,7 @@ export default function App() {
   const lastBackPressTimeRef = useRef<number>(0);
   const selectedMediaRef = useRef<MediaItem | null>(null);
   const isSearchOpenRef = useRef<boolean>(false);
+  const isImdbPreviewOpenRef = useRef<boolean>(false);
   const randomModalItemRef = useRef<MediaItem | null>(null);
   const activeTabRef = useRef<ActiveTab>('home');
 
@@ -156,6 +164,10 @@ export default function App() {
   useEffect(() => {
     isSearchOpenRef.current = isSearchOpen;
   }, [isSearchOpen]);
+
+  useEffect(() => {
+    isImdbPreviewOpenRef.current = isImdbPreviewOpen;
+  }, [isImdbPreviewOpen]);
 
   useEffect(() => {
     randomModalItemRef.current = randomModalItem;
@@ -188,7 +200,8 @@ export default function App() {
         pKey === normalize(shortcuts.goBack) ||
         (shortcuts.goBack === 'Escape' && pressedKey === 'Escape')
       ) {
-        if (isSearchOpenRef.current) setIsSearchOpen(false);
+        if (isImdbPreviewOpenRef.current) setIsImdbPreviewOpen(false);
+        else if (isSearchOpenRef.current) setIsSearchOpen(false);
         else if (selectedMediaRef.current) setSelectedMedia(null);
         else if (randomModalItemRef.current) setRandomModalItem(null);
         return;
@@ -239,7 +252,18 @@ export default function App() {
     }
 
     const handlePopState = () => {
-      // 1. If Preview modal is open, close preview
+      // 1. If IMDb Preview modal is open, close IMDb preview
+      if (isImdbPreviewOpenRef.current) {
+        setIsImdbPreviewOpen(false);
+        try {
+          window.history.pushState({ page: 'ehsaan-home' }, '');
+        } catch {
+          // ignore
+        }
+        return;
+      }
+
+      // 2. If Preview modal is open, close preview
       if (selectedMediaRef.current) {
         setSelectedMedia(null);
         try {
@@ -250,7 +274,7 @@ export default function App() {
         return;
       }
 
-      // 2. If Search modal is open, close search
+      // 3. If Search modal is open, close search
       if (isSearchOpenRef.current) {
         setIsSearchOpen(false);
         try {
@@ -261,7 +285,7 @@ export default function App() {
         return;
       }
 
-      // 3. If Random Pick modal is open, close random pick
+      // 4. If Random Pick modal is open, close random pick
       if (randomModalItemRef.current) {
         setRandomModalItem(null);
         try {
@@ -272,7 +296,7 @@ export default function App() {
         return;
       }
 
-      // 4. If on another tab, go back to Home tab
+      // 5. If on another tab, go back to Home tab
       if (activeTabRef.current !== 'home') {
         setActiveTab('home');
         try {
@@ -283,7 +307,7 @@ export default function App() {
         return;
       }
 
-      // 5. On Home tab: double back within 2 seconds to exit
+      // 6. On Home tab: double back within 2 seconds to exit
       const now = Date.now();
       if (now - lastBackPressTimeRef.current < 2000) {
         // Allow exit
@@ -302,6 +326,12 @@ export default function App() {
 
     window.addEventListener('popstate', handlePopState);
     return () => window.removeEventListener('popstate', handlePopState);
+  }, []);
+
+  // Open IMDb Link Preview Modal with optional initial link/ID
+  const handleOpenImdbPreview = useCallback((initialVal: string = '') => {
+    setImdbPreviewInput(initialVal);
+    setIsImdbPreviewOpen(true);
   }, []);
 
   // Navigate to Watchlist with a specific initial filter
@@ -340,6 +370,7 @@ export default function App() {
         }}
         onOpenSearch={() => setIsSearchOpen(true)}
         onRandomPick={handleTriggerRandomGlobal}
+        onOpenImdbPreview={handleOpenImdbPreview}
         autoHideHeader={settings.tweaks?.autoHideHeader !== false}
         swapSearchAndLists={isSwappedNav}
         onTriggerSwapConfirm={() => setIsSwapNavConfirmOpen(true)}
@@ -363,9 +394,11 @@ export default function App() {
             onMarkWatched={markWatched}
             onToggleWatchlist={toggleWatchlist}
             onToggleFavorite={toggleFavorite}
-            tmdbApiKey={settings.tmdbApiKey}
             onAddMediaToLibrary={addMediaToLibrary}
             onOpenChangelog={handleOpenChangelog}
+            onOpenLicense={() => setIsLicenseModalOpen(true)}
+            tweaks={settings.tweaks}
+            onUpdateSettings={updateSettings}
           />
         )}
 
@@ -374,7 +407,7 @@ export default function App() {
             mediaItems={mediaItems}
             userStates={userStates}
             onSelectMedia={setSelectedMedia}
-            initialFilterStatus={'watchlist'}
+            initialFilterStatus={watchlistInitialFilter}
             onRemoveFromWatchlist={removeFromWatchlist}
             onMarkWatching={markWatching}
             onMarkWatched={markWatched}
@@ -418,9 +451,12 @@ export default function App() {
             onRestoreBackup={restoreBackup}
             onClearCachedTitlesAndImages={clearCachedTitlesAndImages}
             onReplayGuide={() => setIsOnboardingOpen(true)}
+            onOpenLicense={() => setIsLicenseModalOpen(true)}
             mediaItems={mediaItems}
             initialTopic={settingsTopic}
             onRefreshData={refreshLibrary}
+            onReloadAllArtwork={reloadAllArtwork}
+            onRemoveAllDuplicates={removeAllDuplicates}
           />
         )}
       </main>
@@ -484,6 +520,7 @@ export default function App() {
         onToggleTVEpisode={toggleTVEpisode}
         onToggleSeasonEpisodes={toggleSeasonEpisodes}
         onAddItemToList={addItemToList}
+        onOpenImdbPreview={handleOpenImdbPreview}
       />
 
       {/* Universal Search Modal with Plus/Tick Actions */}
@@ -493,10 +530,24 @@ export default function App() {
         onSelectMedia={setSelectedMedia}
         localMediaItems={mediaItems}
         tmdbApiKey={settings.tmdbApiKey}
+        omdbApiKey={settings.omdbApiKey}
         onAddMediaToLibrary={addMediaToLibrary}
         userStates={userStates}
         onToggleWatchlist={toggleWatchlist}
         onToggleWatched={toggleWatched}
+        onOpenImdbPreview={handleOpenImdbPreview}
+      />
+
+      {/* IMDb Movie & TV Series Link Preview Modal */}
+      <ImdbPreviewModal
+        isOpen={isImdbPreviewOpen}
+        onClose={() => setIsImdbPreviewOpen(false)}
+        initialInput={imdbPreviewInput}
+        customApiKey={settings.omdbApiKey}
+        onSelectMedia={setSelectedMedia}
+        onAddMediaToLibrary={addMediaToLibrary}
+        onToggleWatchlist={toggleWatchlist}
+        userStates={userStates}
       />
 
       {/* Random Pick Modal */}
@@ -566,6 +617,13 @@ export default function App() {
         settings={settings}
         onUpdateSettings={updateSettings}
         onRestoreBackup={restoreBackup}
+        onOpenLicense={() => setIsLicenseModalOpen(true)}
+      />
+
+      {/* GNU General Public License v3.0 Modal */}
+      <LicenseModal
+        isOpen={isLicenseModalOpen}
+        onClose={() => setIsLicenseModalOpen(false)}
       />
     </div>
   );

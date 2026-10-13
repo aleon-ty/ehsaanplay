@@ -2,10 +2,8 @@ import { useState, useEffect, useCallback } from 'react';
 
 export function useFullscreen() {
   const [isFullscreen, setIsFullscreen] = useState<boolean>(() => {
-    if (typeof document !== 'undefined') {
-      return !!(document.fullscreenElement || (document as any).webkitFullscreenElement);
-    }
-    return false;
+    if (typeof document === 'undefined') return false;
+    return !!(document.fullscreenElement || (document as any).webkitFullscreenElement);
   });
 
   useEffect(() => {

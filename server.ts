@@ -447,6 +447,230 @@ async function startServer() {
   });
 
   // -------------------------------------------------------------------------
+  // 5. OMDb Secure Server-Side Proxy (Keeps API Key Secure in Production)
+  // -------------------------------------------------------------------------
+  app.get('/api/omdb', async (req: Request, res: Response) => {
+    const imdbId = req.query.i as string;
+    const query = req.query.s as string;
+    const apiKey = process.env.OMDB_API_KEY || process.env.VITE_OMDB_API_KEY || '5ac583a2';
+
+    if (!imdbId && !query) {
+      return res.status(400).json({ Response: 'False', Error: 'Missing i (imdbId) or s (search) query parameter' });
+    }
+
+    try {
+      const targetUrl = new URL('https://www.omdbapi.com/');
+      targetUrl.searchParams.set('apikey', apiKey);
+      if (imdbId) {
+        targetUrl.searchParams.set('i', imdbId.trim());
+        targetUrl.searchParams.set('plot', (req.query.plot as string) || 'full');
+      } else if (query) {
+        targetUrl.searchParams.set('s', query.trim());
+        if (req.query.type) targetUrl.searchParams.set('type', req.query.type as string);
+        if (req.query.page) targetUrl.searchParams.set('page', req.query.page as string);
+      }
+
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 7000);
+      const upstreamRes = await fetch(targetUrl.toString(), { signal: controller.signal });
+      clearTimeout(timeoutId);
+
+      const data = await upstreamRes.json();
+      res.json(data);
+    } catch (err: any) {
+      res.status(502).json({ Response: 'False', Error: err.message || 'Failed to communicate with OMDb API' });
+    }
+  });
+
+  // -------------------------------------------------------------------------
+  // 6. TMDB Secure Server-Side Proxy (Secret Integration)
+  // -------------------------------------------------------------------------
+  app.get('/api/tmdb', async (req: Request, res: Response) => {
+    const endpoint = (req.query.endpoint as string) || 'configuration';
+    
+    // Key resolution order: header override > server env secret > client vite env secret > default fallback
+    const customHeaderKey = req.headers['x-tmdb-api-key'] as string;
+    const apiKey = customHeaderKey || process.env.TMDB_API_KEY || process.env.VITE_TMDB_API_KEY || 'a846f4eb273f08cf2aa2a8ee0b7ad03d';
+    const bearerToken = process.env.TMDB_READ_ACCESS_TOKEN;
+
+    try {
+      const cleanEndpoint = endpoint.replace(/^\/+/, '');
+      const targetUrl = new URL(`https://api.themoviedb.org/3/${cleanEndpoint}`);
+
+      // Copy query parameters except 'endpoint'
+      for (const [key, value] of Object.entries(req.query)) {
+        if (key !== 'endpoint' && typeof value === 'string') {
+          targetUrl.searchParams.set(key, value);
+        }
+      }
+
+      const headers: Record<string, string> = {
+        'Accept': 'application/json',
+      };
+
+      if (bearerToken) {
+        headers['Authorization'] = `Bearer ${bearerToken}`;
+      } else if (apiKey.length > 50 || apiKey.startsWith('eyJ')) {
+        headers['Authorization'] = `Bearer ${apiKey}`;
+      } else {
+        targetUrl.searchParams.set('api_key', apiKey);
+      }
+
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 9000);
+
+      const upstreamRes = await fetch(targetUrl.toString(), {
+        headers,
+        signal: controller.signal,
+      });
+      clearTimeout(timeoutId);
+
+      const data = await upstreamRes.json();
+      res.status(upstreamRes.status).json(data);
+    } catch (err: any) {
+      res.status(502).json({
+        Response: 'False',
+        Error: err.message || 'Failed to communicate with TMDB API via server secret proxy',
+      });
+    }
+  });
+
+  // -------------------------------------------------------------------------
+  // 7. Multi-Source Backend Streaming & Crew Fallback Search Service
+  // -------------------------------------------------------------------------
+  app.get('/api/streaming-info', async (req: Request, res: Response) => {
+    const title = (req.query.title as string || '').trim();
+    const year = (req.query.year as string || '').trim();
+    const imdbId = (req.query.imdbId as string || '').trim();
+    const mediaType = (req.query.type as string || 'movie').trim();
+
+    if (!title && !imdbId) {
+      return res.status(400).json({ error: 'Missing title or imdbId parameter' });
+    }
+
+    try {
+      let tmdbWatchProviders: any[] = [];
+
+      // 1. If imdbId is available, find TMDB ID first
+      let tmdbId: number | null = null;
+      let actualType = mediaType;
+
+      if (imdbId && imdbId.startsWith('tt')) {
+        const apiKey = process.env.TMDB_API_KEY || process.env.VITE_TMDB_API_KEY || 'a846f4eb273f08cf2aa2a8ee0b7ad03d';
+        const findUrl = `https://api.themoviedb.org/3/find/${imdbId}?api_key=${apiKey}&external_source=imdb_id`;
+        const findRes = await fetch(findUrl);
+        if (findRes.ok) {
+          const findData = await findRes.json();
+          const match = findData.movie_results?.[0] || findData.tv_results?.[0];
+          if (match) {
+            tmdbId = match.id;
+            actualType = findData.movie_results?.[0] ? 'movie' : 'tv';
+          }
+        }
+      }
+
+      // 2. Query TMDB Watch Providers if TMDB ID resolved
+      if (tmdbId) {
+        const apiKey = process.env.TMDB_API_KEY || process.env.VITE_TMDB_API_KEY || 'a846f4eb273f08cf2aa2a8ee0b7ad03d';
+        const provUrl = `https://api.themoviedb.org/3/${actualType}/${tmdbId}/watch/providers?api_key=${apiKey}`;
+        const provRes = await fetch(provUrl);
+        if (provRes.ok) {
+          const provData = await provRes.json();
+          const results = provData.results || {};
+          const usRes = results.US || results.GB || results.CA || Object.values(results)[0] as any;
+          if (usRes) {
+            const flatrate = (usRes.flatrate || []).map((p: any) => ({
+              name: p.provider_name,
+              type: 'stream',
+              logoUrl: p.logo_path ? `https://image.tmdb.org/t/p/w92${p.logo_path}` : undefined,
+            }));
+            const rent = (usRes.rent || []).map((p: any) => ({
+              name: p.provider_name,
+              type: 'rent',
+              logoUrl: p.logo_path ? `https://image.tmdb.org/t/p/w92${p.logo_path}` : undefined,
+            }));
+            const buy = (usRes.buy || []).map((p: any) => ({
+              name: p.provider_name,
+              type: 'buy',
+              logoUrl: p.logo_path ? `https://image.tmdb.org/t/p/w92${p.logo_path}` : undefined,
+            }));
+            tmdbWatchProviders = [...flatrate, ...rent, ...buy];
+          }
+        }
+      }
+
+      // 3. Fallback: DuckDuckGo Web Search Scraping if TMDB watch providers are empty
+      if (tmdbWatchProviders.length === 0 && title) {
+        try {
+          const searchQuery = encodeURIComponent(`where to stream ${title} ${year} watch online`);
+          const ddgUrl = `https://html.duckduckgo.com/html/?q=${searchQuery}`;
+          const controller = new AbortController();
+          const timeoutId = setTimeout(() => controller.abort(), 4000);
+
+          const ddgRes = await fetch(ddgUrl, {
+            headers: {
+              'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+            },
+            signal: controller.signal,
+          });
+          clearTimeout(timeoutId);
+
+          if (ddgRes.ok) {
+            const htmlText = await ddgRes.text();
+            const lowerHtml = htmlText.toLowerCase();
+
+            const detectedProviders: { name: string; type: 'stream' | 'rent'; logoUrl?: string }[] = [];
+            const platformKeywords = [
+              { key: 'netflix', name: 'Netflix', logo: 'https://image.tmdb.org/t/p/w92/pbpMk121StLrhA3S31A2S3A2S3.jpg' },
+              { key: 'prime video', name: 'Amazon Prime Video', logo: 'https://image.tmdb.org/t/p/w92/6899vL88A4.jpg' },
+              { key: 'amazon prime', name: 'Amazon Prime Video', logo: 'https://image.tmdb.org/t/p/w92/6899vL88A4.jpg' },
+              { key: 'disney+', name: 'Disney+', logo: 'https://image.tmdb.org/t/p/w92/7qeP3L47.jpg' },
+              { key: 'disney plus', name: 'Disney+', logo: 'https://image.tmdb.org/t/p/w92/7qeP3L47.jpg' },
+              { key: 'hbo max', name: 'Max', logo: 'https://image.tmdb.org/t/p/w92/max.jpg' },
+              { key: 'apple tv', name: 'Apple TV+', logo: 'https://image.tmdb.org/t/p/w92/appletv.jpg' },
+              { key: 'hulu', name: 'Hulu', logo: 'https://image.tmdb.org/t/p/w92/hulu.jpg' },
+              { key: 'paramount+', name: 'Paramount+', logo: 'https://image.tmdb.org/t/p/w92/paramount.jpg' },
+              { key: 'peacock', name: 'Peacock', logo: 'https://image.tmdb.org/t/p/w92/peacock.jpg' },
+            ];
+
+            for (const platform of platformKeywords) {
+              if (lowerHtml.includes(platform.key)) {
+                if (!detectedProviders.some(p => p.name === platform.name)) {
+                  detectedProviders.push({
+                    name: platform.name,
+                    type: 'stream',
+                    logoUrl: platform.logo,
+                  });
+                }
+              }
+            }
+
+            if (detectedProviders.length > 0) {
+              tmdbWatchProviders = detectedProviders;
+            }
+          }
+        } catch {
+          // ignore web search failure
+        }
+      }
+
+      // Default fallback if still empty
+      if (tmdbWatchProviders.length === 0) {
+        tmdbWatchProviders = [
+          { name: 'Stream / VOD Available', type: 'stream' },
+        ];
+      }
+
+      res.json({ providers: tmdbWatchProviders });
+    } catch (err: any) {
+      res.json({
+        providers: [{ name: 'Stream / VOD Available', type: 'stream' }],
+        error: err.message,
+      });
+    }
+  });
+
+  // -------------------------------------------------------------------------
   // Vite Integration (Dev middleware or Production static files)
   // -------------------------------------------------------------------------
   const isProd = process.env.NODE_ENV === 'production';

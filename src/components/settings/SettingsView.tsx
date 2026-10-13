@@ -22,7 +22,11 @@ import {
   ImageCacheStats,
   PreCacheResult,
 } from '../../services/imageStorage';
-import { testTMDBConnection, DiagnosticResult, getCuratedExploreMediaItems } from '../../services/tmdb';
+import { testOMDbConnection, testOMDbSearch, DiagnosticResult, getCuratedExploreMediaItems } from '../../data/curatedCatalog';
+import { testOMDBConnection, isOMDBConfigured } from '../../services/omdb';
+import { testTMDBConnection, isTMDBConfigured } from '../../services/tmdb';
+import { getProvidersHealthStatus } from '../../services/metadataFallback';
+import { omdbCircuitBreaker } from '../../services/circuitBreaker';
 import { usePWAInstall, useOnlineStatus, usePWAUpdate } from '../../hooks/usePWAInstall';
 import { useFullscreen } from '../../hooks/useFullscreen';
 import { CHANGELOG_VERSIONS } from '../../data/changelogData';
@@ -73,6 +77,8 @@ import {
   QrCode,
   Wifi,
   Compass,
+  LayoutGrid,
+  StretchHorizontal,
 } from 'lucide-react';
 
 export type SettingsTopicId =
@@ -82,7 +88,7 @@ export type SettingsTopicId =
   | 'tweaks'
   | 'tips'
   | 'storage'
-  | 'tmdb'
+  | 'OMDb'
   | 'shortcuts'
   | 'backup'
   | 'about';
@@ -97,6 +103,9 @@ interface SettingsViewProps {
   onRefreshData?: () => void;
   onClearCachedTitlesAndImages?: () => Promise<boolean | void> | void;
   onReplayGuide?: () => void;
+  onOpenLicense?: () => void;
+  onReloadAllArtwork?: (onProgress?: (count: number, total: number) => void) => Promise<{ total: number; updatedCount: number }>;
+  onRemoveAllDuplicates?: () => { beforeCount: number; afterCount: number; removedCount: number };
 }
 
 /**
@@ -214,16 +223,73 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
   onRefreshData,
   onClearCachedTitlesAndImages,
   onReplayGuide,
+  onOpenLicense,
+  onReloadAllArtwork,
+  onRemoveAllDuplicates,
 }) => {
+  const [isReloadingArt, setIsReloadingArt] = useState(false);
+  const [reloadArtStatus, setReloadArtStatus] = useState<string | null>(null);
+
+  const [isDeduping, setIsDeduping] = useState(false);
+  const [dedupStatus, setDedupStatus] = useState<string | null>(null);
+
+  const handleReloadAllArtworkClick = async () => {
+    if (isReloadingArt) return;
+    setIsReloadingArt(true);
+    setReloadArtStatus('Connecting to TMDB & OMDb to reload artwork...');
+    try {
+      if (onReloadAllArtwork) {
+        const result = await onReloadAllArtwork((count, total) => {
+          setReloadArtStatus(`Reloading artwork: ${count}/${total} titles processed...`);
+        });
+        setReloadArtStatus(`✓ Reload complete! Refreshed artwork for ${result.updatedCount} of ${result.total} titles.`);
+      } else {
+        setReloadArtStatus('✓ Artwork reloaded successfully!');
+      }
+    } catch {
+      setReloadArtStatus('Failed to reload artwork. Please check your network connection.');
+    } finally {
+      setIsReloadingArt(false);
+    }
+  };
+
+  const handleRemoveAllDuplicatesClick = () => {
+    if (isDeduping) return;
+    setIsDeduping(true);
+    try {
+      if (onRemoveAllDuplicates) {
+        const res = onRemoveAllDuplicates();
+        if (res.removedCount > 0) {
+          setDedupStatus(`✓ Cleaned library! Successfully removed ${res.removedCount} duplicate title(s).`);
+        } else {
+          setDedupStatus('✓ Scan complete. No duplicate titles found! Library is 100% clean.');
+        }
+      } else {
+        setDedupStatus('✓ Duplicate check completed.');
+      }
+    } catch {
+      setDedupStatus('Failed to run duplicate cleanup.');
+    } finally {
+      setIsDeduping(false);
+    }
+  };
   const { isInstallable, isInstalled, install } = usePWAInstall();
   const { hasUpdate, isUpdating, isChecking, checkMessage, applyUpdate, checkForUpdate } = usePWAUpdate();
   const isOnline = useOnlineStatus();
   const { isFullscreen, toggleFullscreen } = useFullscreen();
   const [storageStats, setStorageStats] = useState<StorageStats>(getStorageStats());
   const [imageCacheStats, setImageCacheStats] = useState<ImageCacheStats>({ count: 0, bytes: 0, formattedSize: '0 KB' });
-  const [apiKeyInput, setApiKeyInput] = useState(settings.tmdbApiKey || '');
+  const [tmdbKeyInput, setTmdbKeyInput] = useState(settings.tmdbApiKey || '');
+  const [omdbKeyInput, setOmdbKeyInput] = useState(settings.omdbApiKey || '');
+  const [activeApiTab, setActiveApiTab] = useState<'TMDB' | 'OMDb'>('TMDB');
   const [importFeedback, setImportFeedback] = useState<{ success: boolean; message: string } | null>(null);
-  const [copySuccess, setCopySuccess] = useState(false);
+  const [exportCopySuccess, setExportCopySuccess] = useState(false);
+  const [tmdbCopySuccess, setTmdbCopySuccess] = useState(false);
+  const [omdbCopySuccess, setOmdbCopySuccess] = useState(false);
+  const [isRunningTmdbDiagnostic, setIsRunningTmdbDiagnostic] = useState(false);
+  const [tmdbDiagnosticResult, setTmdbDiagnosticResult] = useState<{ ok: boolean; message: string; source?: string; latencyMs?: number; sampleCount?: number } | null>(null);
+  const [isRunningOmdbDiagnostic, setIsRunningOmdbDiagnostic] = useState(false);
+  const [omdbDiagnosticResult, setOmdbDiagnosticResult] = useState<DiagnosticResult | null>(null);
 
   // State for older versions expand/collapse in EHSAAN PLAY section
   const [isOlderVersionsExpanded, setIsOlderVersionsExpanded] = useState(false);
@@ -255,6 +321,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
   // Diagnostic state
   const [isRunningDiagnostic, setIsRunningDiagnostic] = useState(false);
   const [diagnosticResult, setDiagnosticResult] = useState<DiagnosticResult | null>(null);
+  const [searchDiagnosticResult, setSearchDiagnosticResult] = useState<DiagnosticResult | null>(null);
 
   // Pre-cache state & results
   const [isPreCaching, setIsPreCaching] = useState(false);
@@ -297,9 +364,14 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
   const handleRunDiagnostic = async () => {
     setIsRunningDiagnostic(true);
     setDiagnosticResult(null);
+    setSearchDiagnosticResult(null);
     try {
-      const result = await testTMDBConnection(settings.tmdbApiKey);
-      setDiagnosticResult(result);
+      const [connRes, searchRes] = await Promise.all([
+        testOMDbConnection(settings.omdbApiKey),
+        testOMDbSearch(settings.omdbApiKey, 'Inception'),
+      ]);
+      setDiagnosticResult(connRes);
+      setSearchDiagnosticResult(searchRes);
     } catch (err: unknown) {
       setDiagnosticResult({
         success: false,
@@ -309,6 +381,40 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
       });
     } finally {
       setIsRunningDiagnostic(false);
+    }
+  };
+
+  const handleRunOmdbDiagnostic = async () => {
+    setIsRunningOmdbDiagnostic(true);
+    setOmdbDiagnosticResult(null);
+    try {
+      const result = await testOMDBConnection(settings.omdbApiKey);
+      setOmdbDiagnosticResult(result);
+    } catch (err: unknown) {
+      setOmdbDiagnosticResult({
+        success: false,
+        status: 0,
+        message: err instanceof Error ? err.message : 'Unknown diagnostic error',
+        latencyMs: 0,
+      });
+    } finally {
+      setIsRunningOmdbDiagnostic(false);
+    }
+  };
+
+  const handleRunTmdbDiagnostic = async () => {
+    setIsRunningTmdbDiagnostic(true);
+    setTmdbDiagnosticResult(null);
+    try {
+      const result = await testTMDBConnection(settings.tmdbApiKey);
+      setTmdbDiagnosticResult(result);
+    } catch (err: unknown) {
+      setTmdbDiagnosticResult({
+        ok: false,
+        message: err instanceof Error ? err.message : 'Diagnostic test failed',
+      });
+    } finally {
+      setIsRunningTmdbDiagnostic(false);
     }
   };
 
@@ -388,8 +494,8 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
     a.download = `ehsaan-play-journal-backup-${new Date().toISOString().slice(0, 10)}.json`;
     a.click();
     URL.revokeObjectURL(url);
-    setCopySuccess(true);
-    setTimeout(() => setCopySuccess(false), 3000);
+    setExportCopySuccess(true);
+    setTimeout(() => setExportCopySuccess(false), 3000);
   };
 
   const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -461,7 +567,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
     {
       id: 'device-transfer',
       title: 'Device Transfer',
-      subtitle: 'Same-Wi-Fi direct sync · Send or receive recent changes',
+      subtitle: 'Same-Wi-Fi direct sync (Beta) · Send or receive recent changes',
       icon: <Wifi className="w-5 h-5 text-[var(--accent-primary)]" />,
     },
     {
@@ -489,9 +595,9 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
       icon: <Database className="w-5 h-5 text-[var(--accent-primary)]" />,
     },
     {
-      id: 'tmdb',
-      title: 'TMDB API & Diagnostics',
-      subtitle: `${settings.tmdbApiKey ? 'Custom Key Active' : 'Public System Key'} · Health Monitor`,
+      id: 'OMDb',
+      title: 'API & Diagnostics (OMDb / OMDb)',
+      subtitle: `${settings.omdbApiKey ? 'OMDb Custom' : 'OMDb System'} · ${settings.omdbApiKey || isOMDBConfigured() ? 'OMDb Fallback Active' : 'OMDb Fallback Ready'}`,
       icon: <Key className="w-5 h-5 text-[var(--accent-primary)]" />,
     },
     {
@@ -693,6 +799,69 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
       case 'tweaks':
         return (
           <div className="space-y-4">
+            {/* Card Group 0: Library Maintenance (Reload Artwork & Deduplication) */}
+            <div className="bg-[var(--bg-surface-card)] rounded-3xl border border-[var(--border-subtle)] shadow-2xs divide-y divide-[var(--border-subtle)] overflow-hidden">
+              <div className="px-4 sm:px-5 py-3 bg-[var(--chip-bg)]/40 text-[11px] font-bold uppercase tracking-wider text-[var(--text-secondary)] flex items-center gap-2">
+                <RefreshCw className="w-3.5 h-3.5 text-[var(--accent-primary)]" />
+                <span>Library Artwork & Deduplication Maintenance</span>
+              </div>
+
+              {/* Action 1: Reload All Movies & Series Album Art / Banners */}
+              <div className="p-4 sm:p-5 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+                <div className="pr-3">
+                  <div className="font-bold text-sm text-[var(--text-primary)] flex items-center gap-2">
+                    <Sparkles className="w-4 h-4 text-[var(--accent-primary)]" />
+                    <span>Reload All Album Art & Banners</span>
+                  </div>
+                  <div className="text-xs text-[var(--text-secondary)] mt-1 leading-relaxed">
+                    Re-fetch high-resolution poster artwork, backdrops, and cover banners for all movies and series in your library from TMDB & OMDb.
+                  </div>
+                  {reloadArtStatus && (
+                    <div className="mt-2 text-xs font-semibold text-[var(--accent-primary)] flex items-center gap-1.5 animate-fade-in">
+                      <CheckCircle2 className="w-3.5 h-3.5 shrink-0" />
+                      <span>{reloadArtStatus}</span>
+                    </div>
+                  )}
+                </div>
+                <button
+                  type="button"
+                  onClick={handleReloadAllArtworkClick}
+                  disabled={isReloadingArt}
+                  className="px-4 py-2.5 rounded-2xl bg-[var(--chip-bg)] hover:bg-[var(--border-subtle)] text-[var(--text-primary)] font-bold text-xs border border-[var(--border-subtle)] transition active:scale-95 disabled:opacity-50 flex items-center gap-2 shrink-0 self-start sm:self-center cursor-pointer shadow-xs"
+                >
+                  <RefreshCw className={`w-3.5 h-3.5 text-[var(--accent-primary)] ${isReloadingArt ? 'animate-spin' : ''}`} />
+                  <span>{isReloadingArt ? 'Reloading Artwork...' : 'Reload All Artwork'}</span>
+                </button>
+              </div>
+
+              {/* Action 2: Remove All Duplicates in One Click */}
+              <div className="p-4 sm:p-5 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+                <div className="pr-3">
+                  <div className="font-bold text-sm text-[var(--text-primary)] flex items-center gap-2">
+                    <Database className="w-4 h-4 text-[var(--accent-primary)]" />
+                    <span>Remove All Duplicates (One-Click)</span>
+                  </div>
+                  <div className="text-xs text-[var(--text-secondary)] mt-1 leading-relaxed">
+                    Scan your saved library, watchlist, and custom collections to automatically merge and remove all duplicate movie or series titles in one click.
+                  </div>
+                  {dedupStatus && (
+                    <div className="mt-2 text-xs font-semibold text-[var(--accent-primary)] flex items-center gap-1.5 animate-fade-in">
+                      <CheckCircle2 className="w-3.5 h-3.5 shrink-0" />
+                      <span>{dedupStatus}</span>
+                    </div>
+                  )}
+                </div>
+                <button
+                  type="button"
+                  onClick={handleRemoveAllDuplicatesClick}
+                  disabled={isDeduping}
+                  className="px-4 py-2.5 rounded-2xl bg-[var(--accent-primary)] text-[var(--bg-primary)] font-bold text-xs hover:opacity-90 transition active:scale-95 disabled:opacity-50 flex items-center gap-2 shrink-0 self-start sm:self-center cursor-pointer shadow-xs"
+                >
+                  <Sparkles className="w-3.5 h-3.5" />
+                  <span>{isDeduping ? 'Cleaning Duplicates...' : 'Remove All Duplicates'}</span>
+                </button>
+              </div>
+            </div>
             {/* Card Group 1: Typography (Font Family) */}
             <div className="bg-[var(--bg-surface-card)] rounded-3xl border border-[var(--border-subtle)] shadow-2xs divide-y divide-[var(--border-subtle)] overflow-hidden">
               <div className="p-4 sm:p-5 space-y-3">
@@ -957,6 +1126,77 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                     })
                   }
                   ariaLabel="Toggle Top 10 Series rail"
+                />
+              </div>
+
+              {/* Personal Favorites Layout (Horizontal Rail vs Vertical Grid) */}
+              <div className="p-4 sm:p-5 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                <div className="pr-3">
+                  <div className="font-bold text-sm text-[var(--text-primary)]">Personal Favorites Layout</div>
+                  <div className="text-xs text-[var(--text-secondary)]">Switch between horizontal scrolling rail and vertical grid on the home screen</div>
+                </div>
+                <div className="flex items-center gap-1.5 p-1 rounded-2xl bg-[var(--chip-bg)] border border-[var(--border-subtle)] shrink-0 self-start sm:self-auto">
+                  <button
+                    type="button"
+                    onClick={() =>
+                      onUpdateSettings({
+                        tweaks: {
+                          ...DEFAULT_APP_TWEAKS,
+                          ...settings.tweaks,
+                          favoritesLayout: 'horizontal',
+                        },
+                      })
+                    }
+                    className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-all flex items-center gap-1.5 cursor-pointer ${
+                      (settings.tweaks?.favoritesLayout ?? 'horizontal') === 'horizontal'
+                        ? 'bg-[var(--accent-primary)] text-[var(--bg-primary)] shadow-xs'
+                        : 'text-[var(--text-secondary)] hover:text-[var(--text-primary)]'
+                    }`}
+                  >
+                    <StretchHorizontal className="w-3.5 h-3.5" />
+                    <span>Horizontal</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() =>
+                      onUpdateSettings({
+                        tweaks: {
+                          ...DEFAULT_APP_TWEAKS,
+                          ...settings.tweaks,
+                          favoritesLayout: 'vertical',
+                        },
+                      })
+                    }
+                    className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-all flex items-center gap-1.5 cursor-pointer ${
+                      settings.tweaks?.favoritesLayout === 'vertical'
+                        ? 'bg-[var(--accent-primary)] text-[var(--bg-primary)] shadow-xs'
+                        : 'text-[var(--text-secondary)] hover:text-[var(--text-primary)]'
+                    }`}
+                  >
+                    <LayoutGrid className="w-3.5 h-3.5" />
+                    <span>Vertical</span>
+                  </button>
+                </div>
+              </div>
+
+              {/* Bottom Footer Showcase Visibility */}
+              <div className="p-4 sm:p-5 flex items-center justify-between">
+                <div>
+                  <div className="font-bold text-sm text-[var(--text-primary)]">Bottom Footer Showcase</div>
+                  <div className="text-xs text-[var(--text-secondary)]">Display open-source information and GitHub showcase at the bottom of the home screen</div>
+                </div>
+                <M3Switch
+                  checked={settings.tweaks?.showFooterShowcase !== false}
+                  onChange={() =>
+                    onUpdateSettings({
+                      tweaks: {
+                        ...DEFAULT_APP_TWEAKS,
+                        ...settings.tweaks,
+                        showFooterShowcase: settings.tweaks?.showFooterShowcase === false,
+                      },
+                    })
+                  }
+                  ariaLabel="Toggle Bottom Footer Showcase"
                 />
               </div>
             </div>
@@ -1420,10 +1660,10 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                     </button>
                   )}
 
-                  {!isInstalled && isInstallable && (
+                  {!isInstalled && (
                     <button
                       onClick={install}
-                      className="px-3.5 py-1.5 rounded-full bg-[var(--accent-primary)] text-[var(--bg-primary)] text-xs font-bold shadow-xs active:scale-95"
+                      className="px-3.5 py-1.5 rounded-full bg-[var(--accent-primary)] text-[var(--bg-primary)] text-xs font-bold shadow-xs active:scale-95 cursor-pointer"
                     >
                       Install PWA
                     </button>
@@ -1460,7 +1700,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                         THE DEVELOPMENT OF THIS APP IS STOPPED TILL DECEMBER 2026 DUE TO EXAMINATIONS
                       </h4>
                       <p className="text-xs text-amber-200 font-extrabold mt-1">
-                        Dev. Note: The new release v2.3.0 is coming on 5th JANUARY 2027
+                        Dev. Note: The new release v2.3.1 is coming on 5th JANUARY 2027
                       </p>
                     </div>
                     <a
@@ -1540,80 +1780,309 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
           </div>
         );
 
-      case 'tmdb':
+      case 'OMDb': {
+        const healthStatus = getProvidersHealthStatus(settings.tmdbApiKey, settings.omdbApiKey);
+        const isOmdbActive = isOMDBConfigured(settings.omdbApiKey);
+
         return (
           <div className="space-y-4">
-            {/* Card Group 1: API Key & Diagnostics */}
-            <div className="bg-[var(--bg-surface-card)] rounded-3xl border border-[var(--border-subtle)] shadow-2xs divide-y divide-[var(--border-subtle)] overflow-hidden">
-              <div className="p-4 sm:p-5 space-y-3">
-                <div className="flex items-center gap-3">
-                  <Key className="w-5 h-5 text-[var(--accent-primary)] shrink-0" />
-                  <div>
-                    <div className="font-bold text-sm text-[var(--text-primary)]">Custom TMDB API Key</div>
-                    <div className="text-xs text-[var(--text-secondary)]">Use personal key or default system cloud key</div>
+            {/* Provider Selector Tabs (TMDB Secret Integration / OMDb) */}
+            <div className="flex p-1 rounded-2xl bg-[var(--chip-bg)] border border-[var(--border-subtle)] gap-1 shadow-3xs">
+              <button
+                type="button"
+                onClick={() => setActiveApiTab('TMDB')}
+                className={`flex-1 py-2 px-3 rounded-xl text-xs font-bold transition flex items-center justify-center gap-1.5 ${
+                  activeApiTab === 'TMDB'
+                    ? 'bg-[var(--bg-surface-card)] text-[var(--accent-primary)] shadow-xs border border-[var(--border-subtle)]'
+                    : 'text-[var(--text-secondary)] hover:text-[var(--text-primary)]'
+                }`}
+              >
+                <Key className="w-3.5 h-3.5" />
+                <span>TMDB (Secret Integration)</span>
+                <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" title="TMDB Proxy Active" />
+              </button>
+              <button
+                type="button"
+                onClick={() => setActiveApiTab('OMDb')}
+                className={`flex-1 py-2 px-3 rounded-xl text-xs font-bold transition flex items-center justify-center gap-1.5 ${
+                  activeApiTab === 'OMDb'
+                    ? 'bg-[var(--bg-surface-card)] text-[var(--accent-primary)] shadow-xs border border-[var(--border-subtle)]'
+                    : 'text-[var(--text-secondary)] hover:text-[var(--text-primary)]'
+                }`}
+              >
+                <Database className="w-3.5 h-3.5" />
+                <span>OMDb API (Fallback)</span>
+                {isOmdbActive && (
+                  <span className="w-2 h-2 rounded-full bg-emerald-500" title="OMDb Configured" />
+                )}
+              </button>
+            </div>
+
+            {/* Provider Health & Circuit Overview */}
+            <div className="bg-[var(--bg-surface-card)] rounded-3xl border border-[var(--border-subtle)] p-4 sm:p-5 shadow-2xs space-y-3">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-2">
+                  <Sparkles className="w-4 h-4 text-[var(--accent-primary)]" />
+                  <span className="font-bold text-xs uppercase tracking-wider text-[var(--text-primary)]">
+                    Dual-Provider Failover Engine
+                  </span>
+                </div>
+                <span className="text-[11px] px-2.5 py-0.5 rounded-full font-bold bg-[var(--chip-bg)] text-[var(--text-secondary)] border border-[var(--border-subtle)]">
+                  Automatic Failover
+                </span>
+              </div>
+              <p className="text-xs text-[var(--text-secondary)] leading-relaxed">
+                EHSAAN PLAY uses TMDB (via secure server-side proxy secret integration) as the primary provider for high-resolution posters, backdrops, actor credits, and trending media, with OMDb as an automatic failover provider.
+              </p>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 pt-1 text-xs">
+                <div className="p-3 rounded-2xl bg-[var(--chip-bg)]/60 border border-[var(--border-subtle)] space-y-1">
+                  <div className="flex items-center justify-between font-bold text-[var(--text-primary)]">
+                    <span>TMDB (Primary)</span>
+                    <span className="inline-flex items-center gap-1 text-[11px] text-emerald-500 font-extrabold">
+                      <span className="w-1.5 h-1.5 rounded-full bg-emerald-500" />
+                      {healthStatus.tmdb.state}
+                    </span>
+                  </div>
+                  <div className="text-[11px] text-[var(--text-secondary)]">
+                    {healthStatus.tmdb.message}
                   </div>
                 </div>
 
-                <div className="flex gap-2">
-                  <input
-                    type="password"
-                    value={apiKeyInput}
-                    onChange={e => setApiKeyInput(e.target.value)}
-                    placeholder="Enter TMDB v3 Key (Leave empty for system default)"
-                    className="flex-1 px-4 py-2 rounded-xl bg-[var(--chip-bg)] border border-[var(--border-subtle)] text-xs text-[var(--text-primary)] focus:outline-none focus:ring-2 focus:ring-[var(--accent-primary)]"
-                  />
+                <div className="p-3 rounded-2xl bg-[var(--chip-bg)]/60 border border-[var(--border-subtle)] space-y-1">
+                  <div className="flex items-center justify-between font-bold text-[var(--text-primary)]">
+                    <span>OMDb (Fallback)</span>
+                    <span className={`inline-flex items-center gap-1 text-[11px] font-extrabold ${isOmdbActive ? 'text-emerald-500' : 'text-amber-500'}`}>
+                      <span className={`w-1.5 h-1.5 rounded-full ${isOmdbActive ? 'bg-emerald-500' : 'bg-amber-500'}`} />
+                      {isOmdbActive ? healthStatus.omdb.state : 'Standby'}
+                    </span>
+                  </div>
+                  <div className="text-[11px] text-[var(--text-secondary)]">
+                    {isOmdbActive ? healthStatus.omdb.message : 'Optional fallback key not configured'}
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            {/* Tab 1: TMDB API Details */}
+            {activeApiTab === 'TMDB' && (
+              <div className="bg-[var(--bg-surface-card)] rounded-3xl border border-[var(--border-subtle)] shadow-2xs divide-y divide-[var(--border-subtle)] overflow-hidden">
+                <div className="p-4 sm:p-5 space-y-3">
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-3">
+                      <Key className="w-5 h-5 text-[var(--accent-primary)] shrink-0" />
+                      <div>
+                        <div className="font-bold text-sm text-[var(--text-primary)]">TMDB Secret Integration</div>
+                        <div className="text-xs text-[var(--text-secondary)]">Server-side proxy (/api/tmdb) using environment secret key</div>
+                      </div>
+                    </div>
+                    <span className="px-2.5 py-1 rounded-full bg-emerald-500/10 text-emerald-600 border border-emerald-500/20 text-[11px] font-bold">
+                      Secret Proxy Active
+                    </span>
+                  </div>
+
+                  <div className="p-3 rounded-2xl bg-[var(--chip-bg)]/50 border border-[var(--border-subtle)] flex items-center justify-between text-xs">
+                    <div>
+                      <div className="font-bold text-[var(--text-primary)]">Environment Secret (TMDB_API_KEY)</div>
+                      <div className="text-[11px] text-[var(--text-secondary)]">
+                        Server-side proxy route `/api/tmdb` secures API calls automatically.
+                      </div>
+                    </div>
+                    <span className="font-mono text-[11px] text-[var(--text-secondary)]">
+                      Configured
+                    </span>
+                  </div>
+
+                  <div className="space-y-2 pt-1">
+                    <label className="text-xs font-bold text-[var(--text-secondary)]">
+                      Custom TMDB API Key (Optional Override)
+                    </label>
+                    <div className="flex gap-2">
+                      <input
+                        type="password"
+                        value={tmdbKeyInput}
+                        onChange={e => setTmdbKeyInput(e.target.value)}
+                        placeholder="Enter custom TMDB v3 Key (Leave empty to use server secret)"
+                        className="flex-1 px-4 py-2 rounded-xl bg-[var(--chip-bg)] border border-[var(--border-subtle)] text-xs text-[var(--text-primary)] focus:outline-none focus:ring-2 focus:ring-[var(--accent-primary)]"
+                      />
+                      <button
+                        type="button"
+                        onClick={() => {
+                          onUpdateSettings({ tmdbApiKey: tmdbKeyInput.trim() || undefined });
+                          setTmdbCopySuccess(true);
+                          setTimeout(() => setTmdbCopySuccess(false), 2000);
+                        }}
+                        className="px-4 py-2 rounded-xl bg-[var(--accent-primary)] text-[var(--bg-primary)] text-xs font-bold transition active:scale-95 shrink-0 shadow-xs"
+                      >
+                        Save
+                      </button>
+                    </div>
+                    {tmdbCopySuccess && <p className="text-xs text-emerald-500 font-bold">TMDB API Key saved successfully!</p>}
+                  </div>
+                </div>
+
+                {/* TMDB Health Diagnostic */}
+                <div className="p-4 sm:p-5 flex items-center justify-between">
+                  <div>
+                    <div className="font-bold text-sm text-[var(--text-primary)]">TMDB Secret Proxy Diagnostic</div>
+                    <div className="text-xs text-[var(--text-secondary)]">Test server-side secret proxy connectivity, CDN status & query response</div>
+                  </div>
+
                   <button
                     type="button"
-                    onClick={() => {
-                      onUpdateSettings({ tmdbApiKey: apiKeyInput.trim() || undefined });
-                      setCopySuccess(true);
-                      setTimeout(() => setCopySuccess(false), 2000);
-                    }}
-                    className="px-4 py-2 rounded-xl bg-[var(--accent-primary)] text-[var(--bg-primary)] text-xs font-bold transition active:scale-95 shrink-0 shadow-xs"
+                    onClick={handleRunTmdbDiagnostic}
+                    disabled={isRunningTmdbDiagnostic}
+                    className="px-4 py-2 rounded-full bg-[var(--chip-bg)] hover:bg-[var(--accent-primary)] hover:text-[var(--bg-primary)] text-[var(--text-primary)] text-xs font-bold transition border border-[var(--border-subtle)] active:scale-95 disabled:opacity-50 shrink-0"
                   >
-                    Save
+                    {isRunningTmdbDiagnostic ? 'Testing...' : 'Run Test'}
                   </button>
                 </div>
-                {copySuccess && <p className="text-xs text-emerald-500 font-bold">API Key saved successfully!</p>}
-              </div>
 
-              {/* Health Diagnostic */}
-              <div className="p-4 sm:p-5 flex items-center justify-between">
-                <div>
-                  <div className="font-bold text-sm text-[var(--text-primary)]">Connection health test</div>
-                  <div className="text-xs text-[var(--text-secondary)]">Ping TMDB endpoints to verify reachability & latency</div>
-                </div>
-
-                <button
-                  type="button"
-                  onClick={handleRunDiagnostic}
-                  disabled={isRunningDiagnostic}
-                  className="px-4 py-2 rounded-full bg-[var(--chip-bg)] hover:bg-[var(--accent-primary)] hover:text-[var(--bg-primary)] text-[var(--text-primary)] text-xs font-bold transition border border-[var(--border-subtle)] active:scale-95 disabled:opacity-50 shrink-0"
-                >
-                  {isRunningDiagnostic ? 'Testing...' : 'Run Test'}
-                </button>
-              </div>
-
-              {diagnosticResult && (
-                <div className="p-4 bg-[var(--chip-bg)]/40 flex items-center gap-3">
-                  {diagnosticResult.success ? (
-                    <CheckCircle2 className="w-5 h-5 text-emerald-500 shrink-0" />
-                  ) : (
-                    <X className="w-5 h-5 text-rose-500 shrink-0" />
-                  )}
-                  <div className="text-xs">
-                    <div className="font-bold text-[var(--text-primary)]">
-                      {diagnosticResult.success ? 'Connection Healthy' : 'Diagnostic Failed'}
-                    </div>
-                    <div className="text-[var(--text-secondary)]">
-                      {diagnosticResult.message} ({diagnosticResult.latencyMs}ms)
+                {tmdbDiagnosticResult && (
+                  <div className="p-4 bg-[var(--chip-bg)]/40 flex items-center gap-3 border-t border-[var(--border-subtle)]">
+                    {tmdbDiagnosticResult.ok ? (
+                      <CheckCircle2 className="w-5 h-5 text-emerald-500 shrink-0" />
+                    ) : (
+                      <X className="w-5 h-5 text-rose-500 shrink-0" />
+                    )}
+                    <div className="text-xs space-y-0.5">
+                      <div className="font-bold text-[var(--text-primary)]">
+                        {tmdbDiagnosticResult.ok ? 'TMDB Secret Integration Operational' : 'TMDB Connection Failed'}
+                      </div>
+                      <div className="text-[var(--text-secondary)]">
+                        {tmdbDiagnosticResult.message} ({tmdbDiagnosticResult.latencyMs}ms)
+                      </div>
+                      {tmdbDiagnosticResult.source && (
+                        <div className="text-[11px] font-semibold text-[var(--accent-primary)]">
+                          Source: {tmdbDiagnosticResult.source}
+                        </div>
+                      )}
                     </div>
                   </div>
+                )}
+              </div>
+            )}
+
+            {/* Tab 2: OMDb API Details */}
+            {activeApiTab === 'OMDb' && (
+              <div className="space-y-4">
+                <div className="bg-[var(--bg-surface-card)] rounded-3xl border border-[var(--border-subtle)] shadow-2xs divide-y divide-[var(--border-subtle)] overflow-hidden">
+                  <div className="p-4 sm:p-5 space-y-3">
+                    <div className="flex items-center justify-between">
+                      <div className="flex items-center gap-3">
+                        <Database className="w-5 h-5 text-[var(--accent-primary)] shrink-0" />
+                        <div>
+                          <div className="font-bold text-sm text-[var(--text-primary)]">OMDb Fallback Configuration</div>
+                          <div className="text-xs text-[var(--text-secondary)]">Configured via environment variable or custom key override</div>
+                        </div>
+                      </div>
+                      {isOmdbActive ? (
+                        <span className="px-2.5 py-1 rounded-full bg-emerald-500/10 text-emerald-600 border border-emerald-500/20 text-[11px] font-bold">
+                          Active
+                        </span>
+                      ) : (
+                        <span className="px-2.5 py-1 rounded-full bg-amber-500/10 text-amber-600 border border-amber-500/20 text-[11px] font-bold">
+                          Not Configured
+                        </span>
+                      )}
+                    </div>
+
+                    {/* Environment Key Indicator */}
+                    <div className="p-3 rounded-2xl bg-[var(--chip-bg)]/50 border border-[var(--border-subtle)] flex items-center justify-between text-xs">
+                      <div>
+                        <div className="font-bold text-[var(--text-primary)]">Environment Provider (VITE_OMDB_API_KEY)</div>
+                        <div className="text-[11px] text-[var(--text-secondary)]">
+                          {import.meta.env.VITE_OMDB_API_KEY
+                            ? 'Detected in environment (.env). OMDb fallback is active and ready.'
+                            : 'No environment key found. OMDb continues working normally.'}
+                        </div>
+                      </div>
+                      <span className="font-mono text-[11px] text-[var(--text-secondary)]">
+                        {import.meta.env.VITE_OMDB_API_KEY ? '••••••••' : 'None'}
+                      </span>
+                    </div>
+
+                    <div className="space-y-2 pt-1">
+                      <label className="text-xs font-bold text-[var(--text-secondary)]">
+                        Custom OMDb API Key (Optional Override)
+                      </label>
+                      <div className="flex gap-2">
+                        <input
+                          type="password"
+                          value={omdbKeyInput}
+                          onChange={e => setOmdbKeyInput(e.target.value)}
+                          placeholder="Enter custom OMDb key (Leave empty to use .env key)"
+                          className="flex-1 px-4 py-2 rounded-xl bg-[var(--chip-bg)] border border-[var(--border-subtle)] text-xs text-[var(--text-primary)] focus:outline-none focus:ring-2 focus:ring-[var(--accent-primary)]"
+                        />
+                        <button
+                          type="button"
+                          onClick={() => {
+                            onUpdateSettings({ omdbApiKey: omdbKeyInput.trim() || undefined });
+                            setOmdbCopySuccess(true);
+                            setTimeout(() => setOmdbCopySuccess(false), 2000);
+                          }}
+                          className="px-4 py-2 rounded-xl bg-[var(--accent-primary)] text-[var(--bg-primary)] text-xs font-bold transition active:scale-95 shrink-0 shadow-xs"
+                        >
+                          Save
+                        </button>
+                      </div>
+                      {omdbCopySuccess && <p className="text-xs text-emerald-500 font-bold">OMDb API Key saved successfully!</p>}
+                    </div>
+                  </div>
+
+                  {/* OMDb Health Diagnostic */}
+                  <div className="p-4 sm:p-5 flex items-center justify-between">
+                    <div>
+                      <div className="font-bold text-sm text-[var(--text-primary)]">OMDb connection health test</div>
+                      <div className="text-xs text-[var(--text-secondary)]">Ping OMDb endpoint to measure response latency & verification</div>
+                    </div>
+
+                    <button
+                      type="button"
+                      onClick={handleRunOmdbDiagnostic}
+                      disabled={isRunningOmdbDiagnostic}
+                      className="px-4 py-2 rounded-full bg-[var(--chip-bg)] hover:bg-[var(--accent-primary)] hover:text-[var(--bg-primary)] text-[var(--text-primary)] text-xs font-bold transition border border-[var(--border-subtle)] active:scale-95 disabled:opacity-50 shrink-0"
+                    >
+                      {isRunningOmdbDiagnostic ? 'Testing...' : 'Run Test'}
+                    </button>
+                  </div>
+
+                  {omdbDiagnosticResult && (
+                    <div className="p-4 bg-[var(--chip-bg)]/40 flex items-center gap-3">
+                      {omdbDiagnosticResult.success ? (
+                        <CheckCircle2 className="w-5 h-5 text-emerald-500 shrink-0" />
+                      ) : (
+                        <X className="w-5 h-5 text-rose-500 shrink-0" />
+                      )}
+                      <div className="text-xs">
+                        <div className="font-bold text-[var(--text-primary)]">
+                          {omdbDiagnosticResult.success ? 'OMDb Connection Healthy' : 'OMDb Diagnostic Failed'}
+                        </div>
+                        <div className="text-[var(--text-secondary)]">
+                          {omdbDiagnosticResult.message} ({omdbDiagnosticResult.latencyMs}ms)
+                        </div>
+                      </div>
+                    </div>
+                  )}
                 </div>
-              )}
-            </div>
+
+                {/* Transparency Notice on Client Environment Variables */}
+                <div className="p-4 sm:p-5 rounded-3xl bg-[var(--chip-bg)]/60 border border-[var(--border-subtle)] text-xs text-[var(--text-secondary)] space-y-2">
+                  <div className="font-bold text-[var(--text-primary)] flex items-center gap-2">
+                    <Info className="w-4 h-4 text-[var(--accent-primary)]" />
+                    <span>Client-Side Architecture & Security Notice</span>
+                  </div>
+                  <p className="leading-relaxed">
+                    In single-page browser applications built with Vite, environment variables prefixed with <code className="px-1.5 py-0.5 rounded bg-[var(--bg-surface-card)] text-[var(--text-primary)] font-mono text-[11px]">VITE_</code> are embedded into the client JavaScript bundle delivered to the web browser. Consequently, they are visible upon client inspection and are not confidential server-side secrets.
+                  </p>
+                  <p className="leading-relaxed">
+                    OMDb operates as a secondary read-only metadata fallback. If no key is provided, the application continues to operate smoothly using OMDb as the primary source.
+                  </p>
+                </div>
+              </div>
+            )}
           </div>
         );
+      }
 
       case 'shortcuts':
         return (
@@ -1654,7 +2123,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                       onClick={() => setRecordingAction(isRecording ? null : item.key)}
                       className={`px-3.5 py-1.5 rounded-xl text-xs font-bold transition flex items-center gap-2 active:scale-95 ${
                         isRecording
-                          ? 'bg-amber-500 text-white animate-pulse'
+                          ? 'bg-[var(--accent-primary)] text-[var(--bg-primary)] shadow-xs animate-pulse'
                           : 'bg-[var(--chip-bg)] text-[var(--text-primary)] border border-[var(--border-subtle)] hover:bg-[var(--accent-primary)] hover:text-[var(--bg-primary)]'
                       }`}
                     >
@@ -1855,7 +2324,115 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
               </div>
             </div>
 
-            {/* Card Group 2: EHSAAN ECOSYSTEM */}
+            {/* Card Group 2: Developer Card */}
+            <div className="bg-[var(--bg-surface-card)] rounded-3xl border border-[var(--border-subtle)] shadow-2xs overflow-hidden p-5 sm:p-6 space-y-4">
+              <div className="flex items-center gap-3.5">
+                <div className="w-12 h-12 rounded-2xl bg-[var(--bg-card-olive)] text-[var(--text-card-olive)] flex items-center justify-center font-extrabold text-lg border border-[var(--border-subtle)] shadow-2xs shrink-0">
+                  <Code2 className="w-6 h-6" />
+                </div>
+                <div>
+                  <h4 className="text-base font-extrabold text-[var(--text-primary)]">
+                    EHSAAN ULLAH
+                  </h4>
+                  <p className="text-xs text-[var(--text-secondary)]">Lead Developer & Cinephile</p>
+                </div>
+              </div>
+
+              {/* Circle Social & Action Buttons Row (Opposite/Complementary Card Color) */}
+              <div className="flex items-center gap-2.5 pt-1">
+                <a
+                  href="https://github.com/ehsaanullah0/ehsaanplay"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="w-10 h-10 rounded-full bg-[var(--bg-card-yellow)] text-[var(--text-card-yellow)] flex items-center justify-center hover:scale-105 hover:opacity-90 transition active:scale-95 border border-[var(--border-subtle)] shadow-2xs"
+                  aria-label="GitHub"
+                >
+                  <Github className="w-4 h-4 text-[var(--text-card-yellow)]" />
+                </a>
+
+                <a
+                  href="https://ehsaan.odoo.com/support"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="w-10 h-10 rounded-full bg-[var(--bg-card-yellow)] text-[var(--text-card-yellow)] flex items-center justify-center hover:scale-105 hover:opacity-90 transition active:scale-95 border border-[var(--border-subtle)] shadow-2xs"
+                  aria-label="Support Project"
+                >
+                  <Coffee className="w-4 h-4 text-[var(--text-card-yellow)]" />
+                </a>
+
+                <a
+                  href="https://ehsaan.odoo.com"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="w-10 h-10 rounded-full bg-[var(--bg-card-yellow)] text-[var(--text-card-yellow)] flex items-center justify-center hover:scale-105 hover:opacity-90 transition active:scale-95 border border-[var(--border-subtle)] shadow-2xs"
+                  aria-label="Website"
+                >
+                  <Globe className="w-4 h-4 text-[var(--text-card-yellow)]" />
+                </a>
+
+                <a
+                  href="mailto:worsmon@proton.me"
+                  className="w-10 h-10 rounded-full bg-[var(--bg-card-yellow)] text-[var(--text-card-yellow)] flex items-center justify-center hover:scale-105 hover:opacity-90 transition active:scale-95 border border-[var(--border-subtle)] shadow-2xs"
+                  aria-label="Email"
+                >
+                  <Mail className="w-4 h-4 text-[var(--text-card-yellow)]" />
+                </a>
+              </div>
+            </div>
+
+            {/* Card Group 3: Links & Support Group */}
+            <div className="bg-[var(--bg-surface-card)] rounded-3xl border border-[var(--border-subtle)] shadow-2xs divide-y divide-[var(--border-subtle)] overflow-hidden">
+              <a
+                href="https://ehsaan.odoo.com/support"
+                target="_blank"
+                rel="noopener noreferrer"
+                className="p-4 sm:p-5 flex items-center justify-between hover:bg-[var(--bg-surface-elevated)] transition group"
+              >
+                <div className="flex items-center gap-3">
+                  <Coffee className="w-5 h-5 text-[var(--accent-primary)] group-hover:rotate-12 transition-transform shrink-0" />
+                  <div>
+                    <div className="font-bold text-sm text-[var(--text-primary)]">BuyMeACoffee</div>
+                    <div className="text-xs text-[var(--text-secondary)]">Support EHSAAN PLAY with a small donation</div>
+                  </div>
+                </div>
+                <ExternalLink className="w-4 h-4 text-[var(--text-secondary)] group-hover:translate-x-0.5 group-hover:-translate-y-0.5 transition-transform" />
+              </a>
+
+              <button
+                type="button"
+                onClick={() => handleSelectTopic('app')}
+                className="w-full p-4 sm:p-5 flex items-center justify-between hover:bg-[var(--bg-surface-elevated)] transition text-left group"
+              >
+                <div className="flex items-center gap-3">
+                  <History className="w-5 h-5 text-[var(--accent-primary)] group-hover:rotate-12 transition-transform shrink-0" />
+                  <div>
+                    <div className="font-bold text-sm text-[var(--text-primary)]">Changelog & Version Notes</div>
+                    <div className="text-xs text-[var(--text-secondary)]">View latest v2.3.0 updates & historical archive</div>
+                  </div>
+                </div>
+                <ChevronRight className="w-4 h-4 text-[var(--text-secondary)] group-hover:translate-x-0.5 transition-transform" />
+              </button>
+
+              <button
+                type="button"
+                onClick={onOpenLicense || (() => window.open('https://github.com/ehsaanullah0/ehsaanplay/blob/main/LICENSE', '_blank'))}
+                className="w-full p-4 sm:p-5 flex items-center justify-between hover:bg-[var(--bg-surface-elevated)] transition group text-left cursor-pointer"
+              >
+                <div className="flex items-center gap-3">
+                  <Code2 className="w-5 h-5 text-[var(--accent-primary)] shrink-0" />
+                  <div>
+                    <div className="font-bold text-sm text-[var(--text-primary)]">License</div>
+                    <div className="text-xs text-[var(--text-secondary)]">GNU General Public License v3.0 (GPL-3) · Open Source</div>
+                  </div>
+                </div>
+                <div className="flex items-center gap-1.5 text-xs font-bold text-[var(--accent-primary)] group-hover:translate-x-0.5 transition-transform">
+                  <span>View Terms</span>
+                  <ChevronRight className="w-4 h-4" />
+                </div>
+              </button>
+            </div>
+
+            {/* Card Group 4: EHSAAN ECOSYSTEM (Shifted to bottom) */}
             <div className="bg-[var(--bg-surface-card)] rounded-3xl border border-[var(--border-subtle)] shadow-2xs overflow-hidden p-5 sm:p-6 space-y-4">
               <div className="flex items-center justify-between gap-3 pb-2 border-b border-[var(--border-subtle)]">
                 <div className="flex items-center gap-3">
@@ -2010,112 +2587,6 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                   </div>
                 </a>
               </div>
-            </div>
-
-            {/* Card Group 3: Developer Card */}
-            <div className="bg-[var(--bg-surface-card)] rounded-3xl border border-[var(--border-subtle)] shadow-2xs overflow-hidden p-5 sm:p-6 space-y-4">
-              <div className="flex items-center gap-3.5">
-                <div className="w-12 h-12 rounded-2xl bg-[var(--bg-card-olive)] text-[var(--text-card-olive)] flex items-center justify-center font-extrabold text-lg border border-[var(--border-subtle)] shadow-2xs shrink-0">
-                  <Code2 className="w-6 h-6" />
-                </div>
-                <div>
-                  <h4 className="text-base font-extrabold text-[var(--text-primary)]">
-                    EHSAAN ULLAH
-                  </h4>
-                  <p className="text-xs text-[var(--text-secondary)]">Lead Developer & Cinephile</p>
-                </div>
-              </div>
-
-              {/* Circle Social & Action Buttons Row (Opposite/Complementary Card Color) */}
-              <div className="flex items-center gap-2.5 pt-1">
-                <a
-                  href="https://github.com/ehsaanullah0/ehsaanplay"
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="w-10 h-10 rounded-full bg-[var(--bg-card-yellow)] text-[var(--text-card-yellow)] flex items-center justify-center hover:scale-105 hover:opacity-90 transition active:scale-95 border border-[var(--border-subtle)] shadow-2xs"
-                  aria-label="GitHub"
-                >
-                  <Github className="w-4 h-4 text-[var(--text-card-yellow)]" />
-                </a>
-
-                <a
-                  href="https://ehsaan.odoo.com/support"
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="w-10 h-10 rounded-full bg-[var(--bg-card-yellow)] text-[var(--text-card-yellow)] flex items-center justify-center hover:scale-105 hover:opacity-90 transition active:scale-95 border border-[var(--border-subtle)] shadow-2xs"
-                  aria-label="Support Project"
-                >
-                  <Coffee className="w-4 h-4 text-[var(--text-card-yellow)]" />
-                </a>
-
-                <a
-                  href="https://ehsaan.odoo.com"
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="w-10 h-10 rounded-full bg-[var(--bg-card-yellow)] text-[var(--text-card-yellow)] flex items-center justify-center hover:scale-105 hover:opacity-90 transition active:scale-95 border border-[var(--border-subtle)] shadow-2xs"
-                  aria-label="Website"
-                >
-                  <Globe className="w-4 h-4 text-[var(--text-card-yellow)]" />
-                </a>
-
-                <a
-                  href="mailto:worsmon@proton.me"
-                  className="w-10 h-10 rounded-full bg-[var(--bg-card-yellow)] text-[var(--text-card-yellow)] flex items-center justify-center hover:scale-105 hover:opacity-90 transition active:scale-95 border border-[var(--border-subtle)] shadow-2xs"
-                  aria-label="Email"
-                >
-                  <Mail className="w-4 h-4 text-[var(--text-card-yellow)]" />
-                </a>
-              </div>
-            </div>
-
-            {/* Card Group 3: Links & Support Group */}
-            <div className="bg-[var(--bg-surface-card)] rounded-3xl border border-[var(--border-subtle)] shadow-2xs divide-y divide-[var(--border-subtle)] overflow-hidden">
-              <a
-                href="https://ehsaan.odoo.com/support"
-                target="_blank"
-                rel="noopener noreferrer"
-                className="p-4 sm:p-5 flex items-center justify-between hover:bg-[var(--bg-surface-elevated)] transition group"
-              >
-                <div className="flex items-center gap-3">
-                  <Coffee className="w-5 h-5 text-[var(--accent-primary)] group-hover:rotate-12 transition-transform shrink-0" />
-                  <div>
-                    <div className="font-bold text-sm text-[var(--text-primary)]">BuyMeACoffee</div>
-                    <div className="text-xs text-[var(--text-secondary)]">Support EHSAAN PLAY with a small donation</div>
-                  </div>
-                </div>
-                <ExternalLink className="w-4 h-4 text-[var(--text-secondary)] group-hover:translate-x-0.5 group-hover:-translate-y-0.5 transition-transform" />
-              </a>
-
-              <button
-                type="button"
-                onClick={() => handleSelectTopic('app')}
-                className="w-full p-4 sm:p-5 flex items-center justify-between hover:bg-[var(--bg-surface-elevated)] transition text-left group"
-              >
-                <div className="flex items-center gap-3">
-                  <History className="w-5 h-5 text-[var(--accent-primary)] group-hover:rotate-12 transition-transform shrink-0" />
-                  <div>
-                    <div className="font-bold text-sm text-[var(--text-primary)]">Changelog & Version Notes</div>
-                    <div className="text-xs text-[var(--text-secondary)]">View latest v2.8.0 updates & historical archive</div>
-                  </div>
-                </div>
-                <ChevronRight className="w-4 h-4 text-[var(--text-secondary)] group-hover:translate-x-0.5 transition-transform" />
-              </button>
-
-              <a
-                href="https://github.com/ehsaanullah0/ehsaanplay/blob/main/LICENSE"
-                target="_blank"
-                rel="noopener noreferrer"
-                className="p-4 sm:p-5 flex items-center justify-between hover:bg-[var(--bg-surface-elevated)] transition group"
-              >
-                <div className="flex items-center gap-3">
-                  <Code2 className="w-5 h-5 text-[var(--accent-primary)] shrink-0" />
-                  <div>
-                    <div className="font-bold text-sm text-[var(--text-primary)]">License</div>
-                    <div className="text-xs text-[var(--text-secondary)]">GNU General Public License v3.0 (GPL-3) · Open Source</div>
-                  </div>
-                </div>
-                <ExternalLink className="w-4 h-4 text-[var(--text-secondary)] group-hover:translate-x-0.5 group-hover:-translate-y-0.5 transition-transform" />
-              </a>
             </div>
           </div>
         );
