@@ -7,7 +7,7 @@
 
 ## **Your watchlist. Your taste. Your space.**
 
-# [EHSAANPLAY.AI.STUDIO](https://ehsaanplay.ai.studio)
+# [EHSAANPLAY](https://ehsaanplay.ai.studio)
 </a>
 
 <p>
@@ -368,7 +368,7 @@ If EHSAAN PLAY or any other EHSAAN project is useful to you, you can support the
 # MADE BY EHSAAN ULLAH
 
 **Make useful things. Make them feel good to use.**
-
+## [CONTACT US NOW](https://ehsaan.odoo.com/contactus)
 <br>
 
 <a href="mailto:worsmon@gmail.com">
