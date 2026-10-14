@@ -46,6 +46,7 @@
 -  ✔ **add imdb link metadata crowl as fallback of every service.**
 
 ### legend- ✔COMPLETE | ❌PENDING
+
 ---
 
 # DEVELOPER NOTE
@@ -369,6 +370,7 @@ If EHSAAN PLAY or any other EHSAAN project is useful to you, you can support the
 
 **Make useful things. Make them feel good to use.**
 ## [CONTACT US NOW](https://ehsaan.odoo.com/contactus)
+
 <br>
 
 <a href="mailto:worsmon@gmail.com">
